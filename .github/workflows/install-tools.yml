@@ -1,0 +1,127 @@
+name: Published tool availability
+
+# Both PR validation and merge-triggered publication use this gate from the
+# current checkout. See docs/implementation.md, "Validation and release boundaries".
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.manifest.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module .\scripts\Tools.psm1
+          $manifest = Read-ActionManifest -Path .\release.json
+          $legs = foreach ($target in $manifest.targets) {
+            foreach ($method in @('install', 'binstall')) {
+              @{
+                runner = $target.runner
+                rust_target = $target.rust_target
+                method = $method
+              }
+            }
+          }
+          "matrix=$(@{ include = @($legs) } | ConvertTo-Json -Compress -Depth 5)" >> $env:GITHUB_OUTPUT
+
+  published:
+    name: ${{ matrix.method }} (${{ matrix.rust_target }})
+    needs: matrix
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+    env:
+      # Real method canaries never restore or populate consumer installation caches.
+      CBH_ACTION_DISABLE_CACHE: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Bootstrap official cargo-binstall
+        if: matrix.method == 'binstall'
+        uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
+        with:
+          version: 1.23.0
+      - name: Verify every exact pin and promised asset
+        id: tools
+        shell: pwsh
+        env:
+          CANARY_METHOD: ${{ matrix.method }}
+          CANARY_TARGET: ${{ matrix.rust_target }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "availability-$([guid]::NewGuid().ToString('N'))"
+          & .\scripts\Install-Canary.ps1 -Method $env:CANARY_METHOD -RustTarget $env:CANARY_TARGET -Root $root
+      - name: Exercise installed fixture tools
+        id: fixture
+        shell: pwsh
+        env:
+          CANARY_METHOD: ${{ matrix.method }}
+          CANARY_TOOL_ROOT: ${{ steps.tools.outputs.tool-root }}
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "published-smoke-$([guid]::NewGuid().ToString('N'))"
+          & .\tests\Initialize-Canary.ps1 -Root $root -Method $env:CANARY_METHOD -ExistingToolRoot $env:CANARY_TOOL_ROOT
+      - name: Collect through the current root action
+        id: collect
+        uses: ./
+        with:
+          command: collect
+          install-method: ${{ matrix.method }}
+          working-directory: ${{ steps.fixture.outputs.workspace }}
+          local-path: ${{ steps.fixture.outputs.store }}
+          bench: synthetic
+      - name: Hand off the collected machine key
+        if: steps.collect.outputs.skipped != 'true'
+        shell: pwsh
+        env:
+          CANARY_KEYS: ${{ steps.fixture.outputs.machine-keys }}
+          CANARY_KEY: ${{ steps.collect.outputs.machine-key }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CANARY_KEY)) { throw 'Collection emitted no machine key.' }
+          Set-Content -LiteralPath (Join-Path $env:CANARY_KEYS 'machine-key.txt') -Value $env:CANARY_KEY
+      - name: Analyze through the current root action
+        id: analyze
+        uses: ./
+        with:
+          command: analyze-history
+          install-method: ${{ matrix.method }}
+          working-directory: ${{ steps.fixture.outputs.workspace }}
+          local-path: ${{ steps.fixture.outputs.store }}
+          machine-keys: ${{ steps.fixture.outputs.machine-keys }}
+          context: HEAD
+          expected-platforms: canary
+          completed-platforms: canary
+      - name: Verify real collection and honest reports
+        shell: pwsh
+        env:
+          CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
+          CANARY_STORE: ${{ steps.fixture.outputs.store }}
+          CANARY_KEY: ${{ steps.collect.outputs.machine-key }}
+          CANARY_COLLECTION: ${{ toJSON(steps.collect.outputs) }}
+          CANARY_ANALYSIS: ${{ toJSON(steps.analyze.outputs) }}
+        run: |
+          & .\tests\Assert-Canary.ps1 -Workspace $env:CANARY_WORKSPACE -Store $env:CANARY_STORE `
+            -MachineKey $env:CANARY_KEY -CollectionJson $env:CANARY_COLLECTION -AnalysisJson $env:CANARY_ANALYSIS
+      - name: Upload emitted reports through the consumer artifact action
+        if: ${{ !cancelled() && steps.analyze.outcome == 'success' && steps.analyze.outputs.skipped != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: canary-reports-${{ matrix.method }}-${{ matrix.rust_target }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          # Pass paths unchanged so the actual consumer validates platform path handling.
+          path: |
+            ${{ steps.analyze.outputs.report-markdown }}
+            ${{ steps.analyze.outputs.report-json }}
+            ${{ steps.analyze.outputs.report-summary }}
