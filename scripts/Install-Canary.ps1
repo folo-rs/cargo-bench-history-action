@@ -61,6 +61,7 @@ function Invoke-InstallationCanary {
     foreach ($tool in $manifest.tools) {
         $asset = Get-CanaryAsset $tool $RustTarget
         $archive = Join-Path $archiveRoot $asset.Name
+        Write-Information "Checking promised $($tool.name) $($tool.version) archive for $RustTarget at $($asset.Url)." -InformationAction Continue
         Invoke-WebRequest -Uri $asset.Url -OutFile $archive
         $sidecar = (Invoke-WebRequest -Uri $asset.ChecksumUrl).Content
         # Some HTTP content types produce bytes rather than text.

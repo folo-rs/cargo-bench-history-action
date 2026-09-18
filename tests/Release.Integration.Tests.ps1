@@ -62,6 +62,30 @@ Describe 'Readiness against native Git trees' {
         $plan.CreateTag | Should -BeTrue
     }
 
+    It 'returns a successful script exit when the new version tag does not exist' {
+        Set-Content (Join-Path $script:repo 'release.json') '{"schema_version":1,"version":"1.0.1","tools":[]}'
+        $null = Save-FixtureCommit
+        $pwsh = Get-Command pwsh -CommandType Application | Select-Object -First 1
+        $start = [Diagnostics.ProcessStartInfo]::new($pwsh.Source)
+        $start.UseShellExecute = $false
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        $start.Environment['CANARY_REPOSITORY'] = $script:repo
+        $start.Environment['CANARY_PUBLISH_SCRIPT'] = Join-Path $PSScriptRoot '..\scripts\Publish-Release.ps1'
+        $start.ArgumentList.Add('-NoProfile')
+        $start.ArgumentList.Add('-Command')
+        # GitHub's PowerShell wrapper propagates the final native exit code.
+        $start.ArgumentList.Add('& $env:CANARY_PUBLISH_SCRIPT -RepositoryPath $env:CANARY_REPOSITORY -CheckOnly; if (Test-Path variable:\LASTEXITCODE) { exit $LASTEXITCODE }')
+        $process = [Diagnostics.Process]::Start($start)
+        try {
+            $output = $process.StandardOutput.ReadToEnd()
+            $errorOutput = $process.StandardError.ReadToEnd()
+            $process.WaitForExit()
+            $process.ExitCode | Should -Be 0 -Because "$output $errorOutput"
+        }
+        finally { $process.Dispose() }
+    }
+
     It 'treats adding a consumer workflow as a release-bearing change' {
         $workflows = Join-Path $script:repo '.github\workflows'
         $null = New-Item -ItemType Directory $workflows -Force

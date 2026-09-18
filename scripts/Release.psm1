@@ -9,7 +9,11 @@ function Invoke-ReleaseGit {
     $PSNativeCommandUseErrorActionPreference = $false
     $output = & git -C $RepositoryPath @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
-        if ($AllowMissing -and $LASTEXITCODE -eq 1) { return $null }
+        if ($AllowMissing -and $LASTEXITCODE -eq 1) {
+            # A missing ref is successful absence here, not the script's exit status.
+            $global:LASTEXITCODE = 0
+            return $null
+        }
         throw "git $($Arguments -join ' ') failed ($LASTEXITCODE): $output"
     }
     return ($output -join "`n")

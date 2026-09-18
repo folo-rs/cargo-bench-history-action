@@ -192,7 +192,7 @@ InModuleScope Tools {
                 Remove-Item -LiteralPath (Get-ActionToolPath -Manifest $script:manifest -Root $script:root -Package cargo-bench-history-github)
             } }
             @{ damage = 'missing Cargo receipt'; change = {
-                Remove-Item -LiteralPath (Join-Path $script:root '.crates.toml')
+                Remove-Item -LiteralPath (Join-Path $script:root '.crates.toml') -Force
             } }
             @{ damage = 'missing package receipt'; change = {
                 Set-Content -LiteralPath (Join-Path $script:root '.crates.toml') -Value '[v1]'
