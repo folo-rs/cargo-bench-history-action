@@ -120,6 +120,17 @@ Describe 'Release reconciliation' {
             $script:operations[0] | Should -Match 'original:refs/tags/v1$'
         }
 
+        It 'finds an existing release on a later page without creating it again' {
+            $script:tagTarget = 'original'
+            Mock Invoke-ReleaseGh {
+                '[[{"tag_name":"v1.0.0","draft":false,"prerelease":false}],[{"tag_name":"v1.1.0","draft":false,"prerelease":false},{"tag_name":"v1.2.0","draft":false,"prerelease":false}]]'
+            } -ParameterFilter { $Arguments[0] -eq 'api' }
+            Publish-ActionRelease -RepositoryPath repo -Repository owner/repo
+            $script:operations.Count | Should -Be 1
+            $script:operations[0] | Should -Match 'original:refs/tags/v1$'
+            Should -Invoke Invoke-ReleaseGh -Times 0 -ParameterFilter { $Arguments[0] -eq 'release' }
+        }
+
         It 'does not roll a newer major release backwards' {
             $script:majorTarget = 'major-commit'
             $script:majorVersion = '1.10.0'
