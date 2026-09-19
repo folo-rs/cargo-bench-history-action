@@ -10,4 +10,3 @@
 - Do not publish tags/releases or merge pull requests while developing or testing.
 - Preserve immutable version tags and prevent older release runs from moving a major tag back.
 - Keep `.github/monorepo-revision` pinned to the source commit used by path-mode canaries.
-- Prefix agent-authored GitHub bodies with `[Copilot speaking]`.
