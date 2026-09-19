@@ -1,0 +1,42 @@
+name: Release action
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  availability:
+    if: github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/install-tools.yml
+
+  publish:
+    needs: availability
+    if: github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Only the mutation job is serialized; an old queued run re-reads current refs.
+    # No release/tag writes occur unless the shared availability workflow succeeded.
+    concurrency:
+      group: action-release-publication
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Reconcile immutable release and floating major
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # This boundary needs only the runner's PowerShell/Git/gh, not a Rust
+        # benchmark tool. See docs/implementation.md, "Validation and release boundaries".
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $workflowEvent = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json -AsHashtable
+          $base = if ($env:GITHUB_EVENT_NAME -eq 'push' -and $workflowEvent.before -notmatch '^0+$') { $workflowEvent.before }
+          & .\scripts\Publish-Release.ps1 -BaseRef $base

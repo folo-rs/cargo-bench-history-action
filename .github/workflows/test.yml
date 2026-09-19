@@ -1,0 +1,174 @@
+name: Action validation
+
+on:
+  pull_request: {}
+  push: {}
+  workflow_dispatch: {}
+  merge_group: {}
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.manifest.outputs.matrix }}
+      source: ${{ steps.manifest.outputs.source }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module .\scripts\Tools.psm1
+          $manifest = Read-ActionManifest -Path .\release.json
+          "matrix=$(@{ include = @($manifest.targets) } | ConvertTo-Json -Compress -Depth 5)" >> $env:GITHUB_OUTPUT
+          $source = (Get-Content .\.github\monorepo-revision -Raw).Trim()
+          if ($source -cnotmatch '^[0-9a-f]{40}$') { throw 'Source canaries require an exact monorepo commit.' }
+          "source=$source" >> $env:GITHUB_OUTPUT
+
+  pester:
+    name: Pester (${{ matrix.runner }})
+    needs: setup
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run fast isolated tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable Pester | Where-Object Version -EQ 5.7.1)) {
+            Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+          }
+          Import-Module Pester -RequiredVersion 5.7.1
+          $result = Invoke-Pester -Path .\tests -PassThru -Output Detailed
+          if ($result.Result -ne 'Passed') { throw 'Pester failed.' }
+
+  version-readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check version against the event base and immutable tags
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $workflowEvent = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json -AsHashtable
+          $base = switch ($env:GITHUB_EVENT_NAME) {
+            'pull_request' { $workflowEvent.pull_request.base.sha }
+            'merge_group' { $workflowEvent.merge_group.base_sha }
+            'push' { if ($workflowEvent.before -notmatch '^0+$') { $workflowEvent.before } }
+          }
+          & .\scripts\Publish-Release.ps1 -CheckOnly -BaseRef $base
+
+  path-smoke:
+    name: Source path (${{ matrix.runner }})
+    needs: setup
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    env:
+      CBH_ACTION_DISABLE_CACHE: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Checkout exact canary source
+        uses: actions/checkout@v7
+        with:
+          repository: folo-rs/folo
+          ref: ${{ needs.setup.outputs.source }}
+          path: Folo
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare isolated synthetic benchmark fixture
+        id: fixture
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE 'Folo'
+          "source=$source" >> $env:GITHUB_OUTPUT
+          $root = Join-Path $env:RUNNER_TEMP "source-smoke-$([guid]::NewGuid().ToString('N'))"
+          & .\tests\Initialize-Canary.ps1 -Root $root -Method path -SourcePath $source
+      - name: Collect with source-built tools
+        id: collect
+        uses: ./
+        with:
+          command: collect
+          install-method: path
+          source-path: ${{ steps.fixture.outputs.source }}
+          working-directory: ${{ steps.fixture.outputs.workspace }}
+          local-path: ${{ steps.fixture.outputs.store }}
+          bench: synthetic
+      - name: Hand off the collected machine key
+        if: steps.collect.outputs.skipped != 'true'
+        shell: pwsh
+        env:
+          CANARY_KEYS: ${{ steps.fixture.outputs.machine-keys }}
+          CANARY_KEY: ${{ steps.collect.outputs.machine-key }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CANARY_KEY)) { throw 'Collection emitted no machine key.' }
+          Set-Content -LiteralPath (Join-Path $env:CANARY_KEYS 'machine-key.txt') -Value $env:CANARY_KEY
+      - name: Analyze with source-built tools
+        id: analyze
+        uses: ./
+        with:
+          command: analyze-history
+          install-method: path
+          source-path: ${{ steps.fixture.outputs.source }}
+          working-directory: ${{ steps.fixture.outputs.workspace }}
+          local-path: ${{ steps.fixture.outputs.store }}
+          machine-keys: ${{ steps.fixture.outputs.machine-keys }}
+          context: HEAD
+          expected-platforms: canary
+          completed-platforms: canary
+      - name: Verify real collection and honest reports
+        shell: pwsh
+        env:
+          CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
+          CANARY_STORE: ${{ steps.fixture.outputs.store }}
+          CANARY_KEY: ${{ steps.collect.outputs.machine-key }}
+          CANARY_COLLECTION: ${{ toJSON(steps.collect.outputs) }}
+          CANARY_ANALYSIS: ${{ toJSON(steps.analyze.outputs) }}
+        run: |
+          & .\tests\Assert-Canary.ps1 -Workspace $env:CANARY_WORKSPACE -Store $env:CANARY_STORE `
+            -MachineKey $env:CANARY_KEY -CollectionJson $env:CANARY_COLLECTION -AnalysisJson $env:CANARY_ANALYSIS
+      - name: Upload emitted reports through the consumer artifact action
+        if: ${{ !cancelled() && steps.analyze.outcome == 'success' && steps.analyze.outputs.skipped != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: canary-reports-path-${{ matrix.rust_target }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          # Pass paths unchanged so the actual consumer validates platform path handling.
+          path: |
+            ${{ steps.analyze.outputs.report-markdown }}
+            ${{ steps.analyze.outputs.report-json }}
+            ${{ steps.analyze.outputs.report-summary }}
+
+  availability:
+    uses: ./.github/workflows/install-tools.yml
+
+  install-tools:
+    name: install-tools
+    if: always()
+    needs: availability
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every real installation canary
+        shell: pwsh
+        env:
+          AVAILABILITY_RESULT: ${{ needs.availability.result }}
+        run: |
+          if ($env:AVAILABILITY_RESULT -cne 'success') {
+            throw "Published tool availability did not pass: $env:AVAILABILITY_RESULT"
+          }

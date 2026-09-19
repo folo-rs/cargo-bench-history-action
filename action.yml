@@ -1,0 +1,161 @@
+name: Benchmark history
+description: Collect, analyze and publish benchmark-history results as separate pipeline stages.
+author: folo-rs
+branding:
+  icon: activity
+  color: blue
+
+inputs:
+  command:
+    description: Pipeline stage to execute.
+    required: true
+  install-method:
+    description: Tool installation method (binstall, install or path).
+    default: binstall
+  source-path:
+    description: Folo source checkout for path installation, separate from working-directory.
+  working-directory:
+    description: Measured/configuration checkout; defaults to the calling step working directory.
+  config:
+    description: Benchmark-history configuration path.
+  local-path:
+    description: Local measurement storage instead of the configured cloud backend.
+  packages:
+    description: Comma-separated package selection.
+  exclude:
+    description: Comma-separated packages excluded from workspace collection.
+  bench:
+    description: Comma-separated benchmark target selection.
+  best-of:
+    description: Benchmark repetitions, keeping the minimum measurement.
+  on-existing:
+    description: Existing-measurement policy (error, skip or overwrite).
+  all-features:
+    description: Enable all Cargo features (true or false).
+  no-default-features:
+    description: Disable default Cargo features (true or false).
+  features:
+    description: Comma-separated Cargo features.
+  machine-keys:
+    description: Directory containing selected platform subdirectories with machine-key.txt files.
+  cache:
+    description: Cloud measurement cache directory; conflicts with local-path.
+  context:
+    description: Commit context for collection, backfill or analysis.
+  base:
+    description: Base commit for PR analysis.
+  since:
+    description: History analysis or backfill window.
+  from:
+    description: Start of the backfill range.
+  to:
+    description: End of the backfill range.
+  ignore-errors:
+    description: Continue backfill after individual measurement failures (true or false).
+  body-file:
+    description: Summary Markdown from the same successful analysis as report-file.
+  report-file:
+    description: JSON report from the same successful analysis as body-file.
+  analyzed-sha:
+    description: Commit analyzed by the supplied report.
+  artifact-url:
+    description: Caller-uploaded report artifact URL for publication.
+  expected-platforms:
+    description: Comma-separated platforms expected to collect measurements.
+  completed-platforms:
+    description: Comma-separated platforms with confirmed successful collection.
+  pr-number:
+    description: Pull request number for PR analysis or comment publication.
+  head:
+    description: Frozen head commit for preflight, empty-scope or failure publication.
+  run-id:
+    description: Workflow run identity; defaults to the ambient GitHub run where applicable.
+  run-attempt:
+    description: Workflow run attempt; defaults to the ambient GitHub attempt where applicable.
+  run-url:
+    description: Workflow run URL; defaults to the ambient GitHub run where applicable.
+  conclusion:
+    description: Failed workflow conclusion (failure or cancelled).
+  empty-scope:
+    description: Explicitly publish no benchmarkable packages (true or false).
+
+outputs:
+  instance:
+    description: Internal project namespace derived from configuration.
+    value: ${{ steps.invoke.outputs.instance }}
+  skipped:
+    description: Whether the companion skipped an inapplicable fork-origin run.
+    value: ${{ steps.invoke.outputs.skipped }}
+  machine-key:
+    description: Hardware fingerprint from successful collection.
+    value: ${{ steps.invoke.outputs.machine-key }}
+  outcome:
+    description: Machine-readable analysis outcome.
+    value: ${{ steps.invoke.outputs.outcome }}
+  notable:
+    description: Whether the analysis contains notable changes.
+    value: ${{ steps.invoke.outputs.notable }}
+  partial-platform-coverage:
+    description: Whether completed collection platforms omit an expected platform.
+    value: ${{ steps.invoke.outputs.partial-platform-coverage }}
+  regressions:
+    description: Whether the analysis contains regressions.
+    value: ${{ steps.invoke.outputs.regressions }}
+  report-markdown:
+    description: Full Markdown report path.
+    value: ${{ steps.invoke.outputs.report-markdown }}
+  report-json:
+    description: JSON report path.
+    value: ${{ steps.invoke.outputs.report-json }}
+  report-summary:
+    description: Condensed Markdown summary path.
+    value: ${{ steps.invoke.outputs.report-summary }}
+  publication-state:
+    description: Validated report publication state (findings, clean or no-data).
+    value: ${{ steps.invoke.outputs.publication-state }}
+  can-clear:
+    description: Whether history evidence permits an all-clear annotation.
+    value: ${{ steps.invoke.outputs.can-clear }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare benchmark-history tools
+      id: prepare
+      shell: pwsh
+      env:
+        CBH_ACTION_PATH: ${{ github.action_path }}
+        CBH_INPUTS_JSON: ${{ toJSON(inputs) }}
+      run: '& (Join-Path $env:CBH_ACTION_PATH scripts Run-Action.ps1) -Stage prepare'
+    - name: Restore verified tool installation
+      id: restore
+      if: steps.prepare.outputs.cache-enabled == 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ${{ steps.prepare.outputs.install-root }}
+        key: ${{ steps.prepare.outputs.cache-key }}
+    - name: Bootstrap cargo-binstall
+      if: inputs.install-method == 'binstall' || inputs.install-method == ''
+      uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
+      with:
+        version: 1.23.0
+    - name: Install and verify benchmark-history tools
+      shell: pwsh
+      env:
+        CBH_ACTION_PATH: ${{ github.action_path }}
+        CBH_STATE_PATH: ${{ steps.prepare.outputs.state-path }}
+      run: '& (Join-Path $env:CBH_ACTION_PATH scripts Run-Action.ps1) -Stage install'
+    - name: Save verified tool installation
+      if: steps.prepare.outputs.cache-enabled == 'true' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ${{ steps.prepare.outputs.install-root }}
+        key: ${{ steps.prepare.outputs.cache-key }}
+    - name: Run benchmark-history stage
+      id: invoke
+      shell: pwsh
+      env:
+        CBH_ACTION_PATH: ${{ github.action_path }}
+        CBH_STATE_PATH: ${{ steps.prepare.outputs.state-path }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: '& (Join-Path $env:CBH_ACTION_PATH scripts Run-Action.ps1) -Stage invoke'
