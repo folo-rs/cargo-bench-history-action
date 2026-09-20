@@ -111,7 +111,9 @@ real head/base, matrix and concrete benchmark package scope. History selects wor
 benchmarks and PR selects affected packages, derived from the flow rather than a
 separate scope input. Detection uses the companion's library
 dependency, not another installed executable. The wrapper verifies the required
-machine-readable `skip-all` handoff so missing scope outputs cannot silently skip the graph.
+machine-readable `skipped`/`skip-all` handoff so missing scope outputs cannot silently
+skip the graph. Policy skips carry a reason and gate every downstream operation,
+independently of an empty selected package set.
 `cargo-detect-package` follows the companion's Rust dependency/version plan; it has
 no separate executable pin or installer role in the action manifest. The faker
 remains independently pinned because the real collection canaries execute it.
@@ -209,8 +211,11 @@ private actions and workflow definitions. The CI-only exemptions are `scripts/Re
 `install-tools.yml`, `release.yml` workflows. New scripts and consumer reusable
 workflows are release-bearing by default. Documentation, tests and the canary
 source revision do not require a version increment. Git tree identity includes
-file modes, content and path names; readiness compares both the event's base
-commit and any existing immutable version tag.
+file modes, content and path names; readiness compares the release baseline and any
+existing immutable version tag. Feature pushes, PRs (including stacked PRs) and manual
+validation compare with the fetched `main` tip, so repeated feature commits retain a
+sufficient pending increment. A push to `main` uses its previous tip; merge-group validation
+uses the group's recorded base.
 
 The content-write job is serialized after the shared availability workflow, with
 read-only permissions everywhere else. It refreshes tags inside the publication

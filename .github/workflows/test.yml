@@ -62,16 +62,18 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Check version against the event base and immutable tags
+      # Feature pushes must not mistake their own pending increment for a release.
+      # Ref: docs/implementation.md#version-readiness-and-reconciliation.
+      - name: Check version against the release baseline and immutable tags
         shell: pwsh
         run: |
+          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module .\scripts\Release.psm1 -Force
           $workflowEvent = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json -AsHashtable
-          $base = switch ($env:GITHUB_EVENT_NAME) {
-            'pull_request' { $workflowEvent.pull_request.base.sha }
-            'merge_group' { $workflowEvent.merge_group.base_sha }
-            'push' { if ($workflowEvent.before -notmatch '^0+$') { $workflowEvent.before } }
-          }
+          $base = Get-ValidationReleaseBase -EventName $env:GITHUB_EVENT_NAME `
+            -EventData $workflowEvent -Ref $env:GITHUB_REF
           & .\scripts\Publish-Release.ps1 -CheckOnly -BaseRef $base
 
   path-smoke:

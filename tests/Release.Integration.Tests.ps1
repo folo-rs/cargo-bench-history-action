@@ -62,6 +62,20 @@ Describe 'Readiness against native Git trees' {
         $plan.CreateTag | Should -BeTrue
     }
 
+    It 'retains the pending increment across additional feature-branch commits' {
+        $null = Invoke-FixtureGit @('update-ref', 'refs/remotes/origin/main', $script:original)
+        $null = Invoke-FixtureGit @('checkout', '--quiet', '-b', 'feature')
+        Set-Content (Join-Path $script:repo 'release.json') '{"schema_version":1,"version":"1.1.0","tools":[]}'
+        $pending = Save-FixtureCommit
+        Set-Content (Join-Path $script:repo 'action.yml') 'additional feature work'
+        $null = Save-FixtureCommit
+        $base = Get-ValidationReleaseBase -EventName push -Ref refs/heads/feature `
+            -EventData @{ before = $pending }
+
+        { Assert-ReleaseReadiness -RepositoryPath $script:repo -BaseRef $base } | Should -Not -Throw
+        { Assert-ReleaseReadiness -RepositoryPath $script:repo -BaseRef $pending } | Should -Throw
+    }
+
     It 'returns a successful script exit when the new version tag does not exist' {
         Set-Content (Join-Path $script:repo 'release.json') '{"schema_version":1,"version":"1.0.1","tools":[]}'
         $null = Save-FixtureCommit

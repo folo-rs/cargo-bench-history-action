@@ -37,6 +37,42 @@ function ConvertTo-ReleaseVersion {
     return [version] $Version
 }
 
+function Get-ValidationReleaseBase {
+    # Feature commits share one pending action version. Only release-branch pushes compare
+    # with their previous tip; other branch validation compares with the release branch.
+    # Ref: docs/implementation.md, "Version readiness and reconciliation".
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $EventName,
+        [Parameter(Mandatory)][System.Collections.IDictionary] $EventData,
+        [Parameter(Mandatory)][string] $Ref
+    )
+
+    switch -CaseSensitive ($EventName) {
+        'pull_request' { return 'refs/remotes/origin/main' }
+        'workflow_dispatch' { return 'refs/remotes/origin/main' }
+        'push' {
+            if ($Ref -cne 'refs/heads/main') { return 'refs/remotes/origin/main' }
+            $before = [string] $EventData.before
+            if ($before -cnotmatch '^[0-9a-f]{40}$') { throw 'Push event has no valid previous commit.' }
+            if ($before -cmatch '^0+$') {
+                Write-Verbose 'The release branch has no previous commit; immutable tags still constrain readiness.'
+                return $null
+            }
+            return $before
+        }
+        'merge_group' {
+            $before = [string] $EventData.merge_group.base_sha
+            if ($before -cnotmatch '^[0-9a-f]{40}$' -or $before -cmatch '^0+$') {
+                throw 'Merge-group event has no valid base commit.'
+            }
+            return $before
+        }
+        default { throw "Unsupported version-readiness event '$EventName'." }
+    }
+}
+
 function Test-ReleaseBearingPath {
     param([string] $Path)
     # Default new scripts/workflows to release-bearing so new consumer entry points
@@ -193,4 +229,4 @@ function Publish-ActionRelease {
 }
 
 Export-ModuleMember -Function ConvertTo-ReleaseVersion, Test-ReleaseBearingPath,
-    Assert-ReleaseReadiness, Get-ReleasePlan, Publish-ActionRelease
+    Get-ValidationReleaseBase, Assert-ReleaseReadiness, Get-ReleasePlan, Publish-ActionRelease

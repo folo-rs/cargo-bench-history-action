@@ -29,6 +29,37 @@ Describe 'Stable release versions' {
         (ConvertTo-ReleaseVersion '1.10.0') | Should -BeGreaterThan (ConvertTo-ReleaseVersion '1.9.0')
     }
 
+    Describe 'Version-readiness baseline selection' {
+        It 'uses main rather than an unreleased feature or stacked PR predecessor' -ForEach @(
+            @{ EventName = 'push'; Ref = 'refs/heads/feature' }
+            @{ EventName = 'pull_request'; Ref = 'refs/pull/1/merge' }
+            @{ EventName = 'workflow_dispatch'; Ref = 'refs/heads/feature' }
+        ) {
+            Get-ValidationReleaseBase -EventName $EventName -Ref $Ref `
+                -EventData @{ before = ('a' * 40); pull_request = @{ base = @{ sha = ('b' * 40) } } } |
+                Should -Be 'refs/remotes/origin/main'
+        }
+
+        It 'retains the previous release-branch tip for a main push' {
+            Get-ValidationReleaseBase -EventName push -Ref refs/heads/main `
+                -EventData @{ before = ('a' * 40) } | Should -Be ('a' * 40)
+        }
+
+        It 'retains the merge-group comparison base' {
+            Get-ValidationReleaseBase -EventName merge_group -Ref refs/heads/gh-readonly-queue/main `
+                -EventData @{ merge_group = @{ base_sha = ('b' * 40) } } | Should -Be ('b' * 40)
+        }
+
+        It 'permits only genuine first-push absence' {
+            Get-ValidationReleaseBase -EventName push -Ref refs/heads/main `
+                -EventData @{ before = ('0' * 40) } | Should -BeNullOrEmpty
+            { Get-ValidationReleaseBase -EventName push -Ref refs/heads/main -EventData @{} } | Should -Throw
+            { Get-ValidationReleaseBase -EventName merge_group -Ref refs/heads/queue `
+                    -EventData @{ merge_group = @{ base_sha = ('0' * 40) } } } | Should -Throw
+            { Get-ValidationReleaseBase -EventName schedule -Ref refs/heads/main -EventData @{} } | Should -Throw
+        }
+    }
+
     It 'rejects ambiguous or prerelease versions' -ForEach @('v1.0.0', '01.0.0', '1.0', '1.0.0-rc.1') {
         { ConvertTo-ReleaseVersion $_ } | Should -Throw
     }
