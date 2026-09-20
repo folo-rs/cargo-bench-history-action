@@ -111,7 +111,7 @@ outputs:
     description: Condensed Markdown summary path.
     value: ${{ steps.invoke.outputs.report-summary }}
   publication-state:
-    description: Validated report publication state (findings, clean or no-data).
+    description: Validated report publication state (findings, clean or inconclusive).
     value: ${{ steps.invoke.outputs.publication-state }}
   can-clear:
     description: Whether history evidence permits an all-clear annotation.

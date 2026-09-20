@@ -99,7 +99,7 @@ function Invoke-InstallationCanary {
             if ([string]::IsNullOrWhiteSpace($key)) { throw 'Main tool did not emit a machine key.' }
         }
     }
-    # The workflow's fixture executes scope/faker contracts from this installation,
+    # The workflow's fixture executes the faker contract from this installation,
     # followed by fresh root-action collect/analyze invocations.
     if ($env:GITHUB_OUTPUT) {
         "tool-root=$installRoot" >> $env:GITHUB_OUTPUT

@@ -12,8 +12,7 @@ Describe 'Shared real installation gate orchestration' {
             tools = @(
                 @{ name = 'main'; binary = 'main'; version = '1.2.3'; role = 'tool' },
                 @{ name = 'companion'; binary = 'companion'; version = '2.0.0'; role = 'companion' },
-                @{ name = 'faker'; binary = 'faker'; version = '3.0.0'; role = 'fixture' },
-                @{ name = 'scope'; binary = 'scope'; version = '4.0.0'; role = 'scope' }
+                @{ name = 'faker'; binary = 'faker'; version = '3.0.0'; role = 'fixture' }
             )
             targets = @(@{ rust_target = 'test-target' })
         }
@@ -44,11 +43,11 @@ Describe 'Shared real installation gate orchestration' {
     It 'uses only the shared installer with strict prebuilt mode and every manifest tool' {
         Invoke-InstallationCanary -Method binstall -RustTarget test-target -Root $TestDrive -ManifestPath manifest
         Should -Invoke Install-ActionTools -Times 1 -Exactly -ParameterFilter {
-            $Method -eq 'binstall' -and $RequirePrebuilt -and $Packages.Count -eq 4 -and
-            ($Packages -join ',') -eq 'main,companion,faker,scope' -and $Root.EndsWith('installed')
+            $Method -eq 'binstall' -and $RequirePrebuilt -and $Packages.Count -eq 3 -and
+            ($Packages -join ',') -eq 'main,companion,faker' -and $Root.EndsWith('installed')
         }
-        Should -Invoke Invoke-WebRequest -Times 8 -Exactly
-        Should -Invoke Test-ActionToolInstallation -Times 4 -Exactly
+        Should -Invoke Invoke-WebRequest -Times 6 -Exactly
+        Should -Invoke Test-ActionToolInstallation -Times 3 -Exactly
     }
 
     It 'uses registry installation without a prebuilt-only switch for the install leg' {
@@ -88,9 +87,9 @@ Describe 'Shared real installation gate orchestration' {
     }
 
     It 'rejects any tool whose shared Cargo receipt verification fails' {
-        Mock Test-ActionToolInstallation { $false } -ParameterFilter { $Package -eq 'scope' }
+        Mock Test-ActionToolInstallation { $false } -ParameterFilter { $Package -eq 'faker' }
         { Invoke-InstallationCanary -Method install -RustTarget test-target -Root $TestDrive -ManifestPath manifest } | Should -Throw
-        Should -Invoke Test-ActionToolInstallation -Times 1 -Exactly -ParameterFilter { $Package -eq 'scope' }
+        Should -Invoke Test-ActionToolInstallation -Times 1 -Exactly -ParameterFilter { $Package -eq 'faker' }
     }
 }
 

@@ -42,6 +42,7 @@ function Test-ReleaseBearingPath {
     # Default new scripts/workflows to release-bearing so new consumer entry points
     # cannot accidentally bypass readiness. Only these CI-owned files are exempt.
     if ($Path -cin @('action.yml', 'action.yaml', 'release.json')) { return $true }
+    if ($Path -clike '.github/actions/*') { return $true }
     if ($Path -clike 'scripts/*') {
         return $Path -cnotin @(
             'scripts/Release.psm1', 'scripts/Publish-Release.ps1', 'scripts/Install-Canary.ps1'

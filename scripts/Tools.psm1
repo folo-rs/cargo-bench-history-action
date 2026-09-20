@@ -29,7 +29,7 @@ function Read-ActionManifest {
         if ($tool.name -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or
             $tool.binary -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or
             $tool.version -cnotmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' -or
-            $tool.role -cnotin @('tool', 'companion', 'fixture', 'scope')) {
+            $tool.role -cnotin @('tool', 'companion', 'fixture')) {
             throw 'Each tool must have a package, binary, exact version and recognized role.'
         }
         if ($names.ContainsKey($tool.name) -or $binaries.ContainsKey($tool.binary)) {
@@ -59,7 +59,7 @@ function Get-RequiredTool {
 
     $usesMain = $Command -cin @('collect', 'backfill', 'analyze-history', 'analyze-pr')
     if (!$usesMain -and $Command -cne 'alert' -and
-        $Command -cnotmatch '^publish-(comment|issue)-(findings|clean|preflight|no-data|failed)$') {
+        $Command -cnotmatch '^publish-(comment|issue)-(findings|clean|preflight|inconclusive|failed)$') {
         throw "Unknown action command: $Command"
     }
     foreach ($tool in $Manifest.tools) {

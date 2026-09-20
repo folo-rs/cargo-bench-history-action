@@ -41,7 +41,6 @@ InModuleScope Tools {
                     @{ name = 'cargo-bench-history'; binary = 'cargo-bench-history'; version = '3.2.1'; role = 'tool' }
                     @{ name = 'cargo-bench-history-github'; binary = 'cargo-bench-history-github'; version = '4.3.2'; role = 'companion' }
                     @{ name = 'cargo-bench-history-faker'; binary = 'cargo-bench-history-faker'; version = '5.4.3'; role = 'fixture' }
-                    @{ name = 'cargo-detect-package'; binary = 'cargo-detect-package'; version = '6.5.4'; role = 'scope' }
                 )
                 targets = @(@{ runner = 'fixture'; rust_target = 'fixture-target'; os = 'Fixture'; arch = 'Fixture' })
             }
@@ -99,7 +98,7 @@ InModuleScope Tools {
             $path = Join-Path $TestDrive 'release.json'
             $script:manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path
             $read = Read-ActionManifest -Path $path
-            $read.tools.version | Should -Be @('3.2.1', '4.3.2', '5.4.3', '6.5.4')
+            $read.tools.version | Should -Be @('3.2.1', '4.3.2', '5.4.3')
         }
 
         It 'rejects invalid manifests: <case>' -ForEach @(
@@ -108,6 +107,7 @@ InModuleScope Tools {
             @{ case = 'duplicate role'; change = { $script:manifest.tools[2].role = 'companion' } }
             @{ case = 'version range'; change = { $script:manifest.tools[0].version = '^3.2' } }
             @{ case = 'package path'; change = { $script:manifest.tools[0].name = '../another-package' } }
+            @{ case = 'unknown role'; change = { $script:manifest.tools[2].role = 'unused' } }
         ) {
             & $change
             $path = Join-Path $TestDrive 'invalid.json'
@@ -125,7 +125,7 @@ InModuleScope Tools {
 
         It 'selects only the companion for every publication and alert command' {
             $commands = @('alert') + @(foreach ($sink in @('comment', 'issue')) {
-                foreach ($state in @('findings', 'clean', 'preflight', 'no-data', 'failed')) {
+                foreach ($state in @('findings', 'clean', 'preflight', 'inconclusive', 'failed')) {
                     "publish-$sink-$state"
                 }
             })
@@ -137,6 +137,8 @@ InModuleScope Tools {
 
         It 'rejects unsupported commands instead of installing anything' {
             { Get-RequiredTool -Manifest $script:manifest -Command 'publish-issue-unknown' } | Should -Throw
+            { Get-RequiredTool -Manifest $script:manifest -Command 'publish-issue-no-data' } | Should -Throw
+            { Get-RequiredTool -Manifest $script:manifest -Command 'publish-comment-no-data' } | Should -Throw
             { Get-RequiredTool -Manifest $script:manifest -Command 'COLLECT' } | Should -Throw
             $script:processCalls.Count | Should -Be 0
         }
@@ -273,7 +275,7 @@ InModuleScope Tools {
                     $packagePath, '--locked', '--force', '--root', $script:root)
                 $script:receipts[$packages[$index]].version | Should -Be $script:sourceVersion
             }
-            $script:manifest.tools.version | Should -Be @('3.2.1', '4.3.2', '5.4.3', '6.5.4')
+            $script:manifest.tools.version | Should -Be @('3.2.1', '4.3.2', '5.4.3')
             Test-ActionToolInstallation -Manifest $script:manifest -Root $script:root `
                 -Package cargo-bench-history-github | Should -BeFalse
         }
@@ -355,7 +357,7 @@ InModuleScope Tools {
         }
 
         It 'allows test tooling only when the gate explicitly selects it' {
-            $packages = @($script:manifest.tools | Where-Object role -In @('fixture', 'scope') | ForEach-Object name)
+            $packages = @($script:manifest.tools | Where-Object role -EQ fixture | ForEach-Object name)
             $result = Install-ActionTools -Manifest $script:manifest -Method install -Root $script:root -Packages $packages
             $result.Keys | Sort-Object | Should -Be ($packages | Sort-Object)
         }

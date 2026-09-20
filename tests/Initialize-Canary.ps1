@@ -1,7 +1,7 @@
 #Requires -Version 7.6
 <#
 Real method/path canaries call this to create an isolated, committed Cargo fixture
-and execute the manifest's scope/faker contracts. Cargo bench uses the tiny Rust
+and execute the manifest-pinned faker. Cargo bench uses the tiny Rust
 bridge to the faker, never real-time performance measurement.
 #>
 [CmdletBinding()]
@@ -16,6 +16,8 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 Import-Module (Join-Path $PSScriptRoot '..\scripts\Tools.psm1') -Force
 $manifest = Read-ActionManifest -Path (Join-Path $PSScriptRoot '..\release.json')
+$fakerTool = @($manifest.tools | Where-Object role -EQ fixture)
+if ($fakerTool.Count -ne 1) { throw 'The fixture tool must be declared uniquely.' }
 if (Test-Path -LiteralPath $Root) { throw 'Fixture root must be absent.' }
 $null = New-Item -ItemType Directory -Path $Root
 $workspace = Join-Path $Root 'workspace'
@@ -28,16 +30,12 @@ $null = New-Item -ItemType Directory -Path $keys
 $toolRoot = $ExistingToolRoot
 if (-not $toolRoot) {
     $toolRoot = Join-Path $Root 'fixture-tools'
-    $packages = @($manifest.tools | Where-Object role -In @('fixture', 'scope') | ForEach-Object name)
+    $packages = @($fakerTool[0].name)
     $parameters = @{ Manifest = $manifest; Method = $Method; Root = $toolRoot; Packages = $packages }
     if ($Method -eq 'path') { $parameters.SourcePath = $SourcePath }
     $null = Install-ActionTools @parameters
 }
-$fakerTool = @($manifest.tools | Where-Object role -EQ fixture)
-$scopeTool = @($manifest.tools | Where-Object role -EQ scope)
-if ($fakerTool.Count -ne 1 -or $scopeTool.Count -ne 1) { throw 'Fixture and scope tools must be declared.' }
 $faker = Get-ActionToolPath -Manifest $manifest -Root $toolRoot -Package $fakerTool[0].name
-$detector = Get-ActionToolPath -Manifest $manifest -Root $toolRoot -Package $scopeTool[0].name
 
 $oldTarget = $env:CARGO_TARGET_DIR
 $oldGlobal = $env:GIT_CONFIG_GLOBAL
@@ -58,9 +56,6 @@ try {
     try {
         & cargo generate-lockfile --offline
         if ($LASTEXITCODE -ne 0) { throw "Fixture lockfile generation failed ($LASTEXITCODE)." }
-        & $detector --path (Join-Path $workspace 'packages\action_canary\benches\synthetic.rs') --via-env ACTION_CANARY_PACKAGE `
-            pwsh -NoProfile -Command 'if ($env:ACTION_CANARY_PACKAGE -cne "action_canary") { throw "Wrong detected package" }'
-        if ($LASTEXITCODE -ne 0) { throw "Package detection smoke failed ($LASTEXITCODE)." }
         & git -c init.defaultBranch=main init --quiet
         if ($LASTEXITCODE -ne 0) { throw 'Fixture Git initialization failed.' }
         & git -c gc.auto=0 add .

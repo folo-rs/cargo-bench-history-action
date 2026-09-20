@@ -1,13 +1,115 @@
 # Benchmark history action
 
-A root composite GitHub action for independently scheduled benchmark collection,
-analysis and publication. It installs the tool set pinned in `release.json` and
-delegates execution to `cargo-bench-history-github`.
+Reusable workflows collect benchmark history and report changes without requiring
+each repository to maintain the collection matrix, receipt handoff and publication
+job graph. The root composite action remains available for custom job graphs.
 
-This repository exposes the root action, not public reusable workflows. Callers
-assemble their own jobs, checkout, benchmark prerequisites, platform evidence,
-storage, concurrency and artifact upload/download. Analysis never posts a comment
-or issue, and the action never uploads reports.
+## Start with the reusable workflows
+
+Commit your benchmark-history configuration and provision its Azure store and
+federated identity using
+[`setup-azure`](https://folo-rs.github.io/folo/cargo-bench-history/commands/setup-azure.html).
+Set repository variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` to the deployment's
+managed-identity client ID and tenant ID.
+
+Create a history caller:
+
+```yaml
+name: Benchmark history
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+jobs:
+  benchmark-history:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      issues: write
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v1
+    with:
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+```
+
+Create a PR caller:
+
+```yaml
+name: PR benchmark history
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+jobs:
+  benchmark-history:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      pull-requests: write
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@v1
+    with:
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+```
+
+No package list is needed. History collects the workspace; PR preparation selects
+affected benchmark packages and their dependents automatically. The workflows own
+checkout, the platform matrix, rerun-safe collection, receipt reconciliation,
+analysis, report upload, publication and concurrency. The `closed` event cancels
+superseded PR work without starting another collection.
+
+Under default GitHub settings, the platform restricts effective fork-PR
+`id-token` permission after YAML evaluation. Approval to run does not grant that
+permission. This server-enforced restriction prevents a default fork PR from
+minting the Azure assertion; the same-repository conditions select intended work
+and are not the authorization boundary. Nondefault write-token exceptions are
+outside this starter's assumptions.
+
+Reports are uploaded as `bench-history-report-<project>-<run-id>-<attempt>` or
+`pr-bench-history-report-<project>-<run-id>-<attempt>`, containing `report.md`,
+`report.json` and `summary.md`. A first history may be inconclusive, and no rolling
+issue need exist until findings appear. Clean updates leave an existing issue open;
+inconclusive evidence cannot clear findings. Execution failures remain failures,
+including when surviving platforms produce a useful qualified report.
+
+### Workflow configuration
+
+Both callers require the Azure identifiers as strings. Optional inputs are:
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `platforms` | `ubuntu-latest,windows-latest` | CSV collection runner labels. |
+| `working-directory` | `.` | Project directory relative to the caller repository. |
+| `config` | `.cargo/bench_history.toml` under the invocation project | Committed configuration file, relative to that project directory. |
+| `exclude` | Empty | Packages excluded from collection; PR exclusions apply after dependency expansion. |
+| `bench` | Empty | CSV Cargo benchmark targets. |
+| `best-of` | `1` | Repetitions, retaining each metric's minimum. |
+| `all-features` | `true` | Enable all Cargo features. |
+| `no-default-features` | `false` | Disable default Cargo features. |
+| `features` | Empty | Additional CSV Cargo features. |
+| `install-method` | `binstall` | `binstall`, `install` or `path` for every required tool. |
+| `source-path` | Empty | Folo source directory relative to the invocation checkout, required only for `path`. |
+| `publish` | `true` | Enable all GitHub lifecycle/report writes. Analysis and artifacts remain available when false. |
+| `since` | Main tool default | History-only look-back window. |
+
+The workflows return `outcome`, `publication-state`, `notable`, `regressions`,
+`partial-platform-coverage`, `report-artifact-id` and `report-artifact-url` when
+analysis runs. They do not expose paths belonging to another job. `publication-state`
+is `findings`, `clean` or `inconclusive`; the underlying analysis outcome remains
+distinct. An empty selected benchmark scope is an explicit no-analysis path.
+
+For extra benchmark prerequisites, provide the fixed repository-local action
+`.github/actions/bench-history-setup/action.yml`. Collection calls it from the
+invocation checkout. There is no setup action path/ref override. Repositories
+needing a different job graph can use the root action below.
+
+Source-mode Folo callers set `install-method: path` and `source-path: .`. Every tool
+comes from that invocation checkout, while PR measurements use a separate checkout
+of the frozen real head. The workflow and its internal actions stay on the same
+selected action revision through GitHub's `$/` self-repository references.
 
 ## Prerequisites
 
@@ -17,6 +119,7 @@ or issue, and the action never uploads reports.
 - PowerShell 7.6 or later and Cargo. The release manifest lists supported runners.
   `binstall` bootstraps the pinned official cargo-binstall action; `install` and
   fallback compilation additionally require a working Rust build environment.
+- GitHub.com Actions runner 2.336.0 or later for reusable workflow self references.
 - Full Git history for analysis and backfill (`fetch-depth: 0`), and any required
   base refs fetched by the caller.
 - A committed `.cargo/bench_history.toml` with a stable project identity, or an
@@ -44,12 +147,13 @@ environment variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`, and grant
 the action passes its environment through unchanged. Do not set `local-path` in
 that flow. Cloud analysis may use `cache` for its local read cache.
 
-## Hand-assembled local history workflow
+## Advanced: root action reference
 
-Replace `ACTION_COMMIT` with a reviewed immutable commit of this repository.
-Registry installation succeeds only once every exact release-manifest pin is
-published; source-mode results do not establish registry/prebuilt availability.
-The initial companion runtime pin requires the coordinated monorepo release.
+The root composite exposes individual commands for custom workflows. Callers of
+this lower layer own checkout, prerequisites, dependencies, concurrency, collection
+evidence and artifact transport. Analysis never publishes, and the root action
+never uploads reports. A full commit reference can replace `@v1` when a consumer
+wants immutable version selection.
 
 This example keeps local measurement history in a caller-owned cache, collects on
 one platform, analyzes it and uploads the reports. Its first run may report no
@@ -79,7 +183,7 @@ jobs:
           path: ${{ runner.temp }}/measurement-history
           key: measurements-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: measurements-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}-
-      - uses: folo-rs/cargo-bench-history-action@ACTION_COMMIT
+      - uses: folo-rs/cargo-bench-history-action@v1
         id: collect
         with:
           command: collect
@@ -97,7 +201,7 @@ jobs:
           New-Item -ItemType Directory -Path $platformDirectory | Out-Null
           $env:CBH_MACHINE_KEY | Set-Content -LiteralPath (Join-Path $platformDirectory 'machine-key.txt')
           "directory=$directory" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
-      - uses: folo-rs/cargo-bench-history-action@ACTION_COMMIT
+      - uses: folo-rs/cargo-bench-history-action@v1
         id: analyze
         with:
           command: analyze-history
@@ -130,7 +234,7 @@ Publication is a separate step after upload. For example, history findings can b
 published with the following step in a job granted `issues: write`:
 
 ```yaml
-- uses: folo-rs/cargo-bench-history-action@ACTION_COMMIT
+- uses: folo-rs/cargo-bench-history-action@v1
   if: steps.analyze.outputs.publication-state == 'findings'
   with:
     command: publish-issue-findings
@@ -149,7 +253,7 @@ command's PR scope/head evidence. The companion uses the ambient short-lived
 PR work before credentialed benchmark/publication operations. Do not run untrusted
 PR code in a privileged `pull_request_target` workflow.
 
-## Commands and inputs
+### Root commands and inputs
 
 | Command | Purpose |
 | --- | --- |
@@ -157,8 +261,8 @@ PR code in a privileged `pull_request_target` workflow.
 | `backfill` | Collect missing measurements across a historical range. |
 | `analyze-history` | Analyze history and write reports without publication. |
 | `analyze-pr` | Compare a PR against its base and write reports without publication. |
-| `publish-comment-findings`, `publish-comment-clean`, `publish-comment-preflight`, `publish-comment-no-data`, `publish-comment-failed` | Publish PR result or lifecycle evidence. |
-| `publish-issue-findings`, `publish-issue-clean`, `publish-issue-preflight`, `publish-issue-no-data`, `publish-issue-failed` | Maintain the project's rolling history issue. |
+| `publish-comment-findings`, `publish-comment-clean`, `publish-comment-preflight`, `publish-comment-inconclusive`, `publish-comment-failed` | Publish PR result or lifecycle evidence. |
+| `publish-issue-findings`, `publish-issue-clean`, `publish-issue-preflight`, `publish-issue-inconclusive`, `publish-issue-failed` | Maintain the project's rolling history issue. |
 | `alert` | Publish one workflow-failure alert, separate from the rolling issue. |
 
 `command` is required. `install-method` defaults to `binstall`. All other metadata
@@ -170,7 +274,7 @@ The root metadata in [action.yml](action.yml) describes every input.
 measured/configuration checkout, not the tool's source checkout. In source mode:
 
 ```yaml
-- uses: folo-rs/cargo-bench-history-action@ACTION_COMMIT
+- uses: folo-rs/cargo-bench-history-action@v1
   with:
     command: collect
     install-method: path
@@ -183,7 +287,7 @@ The caller must check out both directories. `source-path` is required only for
 `path`; it points to the Folo monorepo containing `packages/`. It does not override
 the release manifest for registry installations.
 
-## Installation and outputs
+### Root installation and outputs
 
 `binstall` installs exact manifest versions and permits source fallback.
 `install` uses exact-version `cargo install --locked`. `path` always builds and
@@ -191,7 +295,8 @@ force-installs from the selected source checkout; it never restores the released
 tool cache. Its installed versions must match that checkout's Cargo metadata,
 not the registry versions in `release.json`. Every command installs the companion.
 Collection, backfill and analysis also install the main tool; consumers never
-install fixture/scope tools.
+install the faker. Package ownership queries are linked into the companion, not
+provided by a separately installed detector executable.
 
 Published installations cache Cargo receipts and verified executable files by OS,
 architecture and the exact required tool versions. Invalid or missing evidence

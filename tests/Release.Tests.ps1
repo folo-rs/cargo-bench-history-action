@@ -8,7 +8,8 @@ BeforeDiscovery {
 Describe 'Release-bearing paths' {
     It 'requires increments for distributed runtime and reusable workflow changes' -ForEach @(
         'action.yml', 'release.json', 'scripts/Tools.psm1', 'scripts/Run-Action.ps1',
-        'scripts/New-Runtime.ps1', '.github/workflows/history.yml', '.github/workflows/pr.yml'
+        'scripts/New-Runtime.ps1', '.github/workflows/history.yml', '.github/workflows/pr.yml',
+        '.github/actions/workflow-tools/action.yml'
     ) {
         Test-ReleaseBearingPath $_ | Should -BeTrue
     }

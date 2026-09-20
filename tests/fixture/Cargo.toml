@@ -1,5 +1,5 @@
 [workspace]
-# Package detection deliberately excludes workspace-root packages.
+# The companion's ownership query deliberately excludes workspace-root packages.
 members = ["packages/action_canary"]
 resolver = "3"
 

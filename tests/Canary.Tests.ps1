@@ -42,7 +42,7 @@ Describe 'Honest single-point analysis evidence' {
             census = @{ in_scope = 1; judged = 0; coverage = 'nothing_judged' }
         }
         $script:outputs = @{
-            outcome = 'insufficient_baseline'; 'publication-state' = 'no-data'
+            outcome = 'insufficient_baseline'; 'publication-state' = 'inconclusive'
             'can-clear' = 'false'; 'partial-platform-coverage' = 'false'
         }
     }

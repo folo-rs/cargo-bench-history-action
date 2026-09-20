@@ -37,7 +37,7 @@ function Assert-CanaryAnalysis {
         $Report.outcome -cne 'insufficient_baseline' -or $Report.notable) {
         throw 'One stored synthetic point must yield an honest insufficient-baseline report.'
     }
-    if ($Outputs['outcome'] -cne $Report.outcome -or $Outputs['publication-state'] -cne 'no-data' -or
+    if ($Outputs['outcome'] -cne $Report.outcome -or $Outputs['publication-state'] -cne 'inconclusive' -or
         $Outputs['can-clear'] -cne 'false' -or $Outputs['partial-platform-coverage'] -cne 'false') {
         throw 'Action outputs disagree with the report or the complete fixture platform evidence.'
     }

@@ -1,0 +1,244 @@
+#Requires -Version 7.6
+# The release-owned workflow adapter uses these functions for checkout paths,
+# installation and native argument/file wiring. The companion owns namespace,
+# scope, receipt reconciliation and publication decisions.
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'Tools.psm1')
+
+function Initialize-WorkflowContext {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] [string] $Workspace,
+        [Parameter(Mandatory)] [string] $TempDirectory,
+        [Parameter(Mandatory)] [string] $Repository,
+        [ValidateSet('binstall', 'install', 'path')] [string] $Method = 'binstall',
+        [string] $WorkingDirectory = '.',
+        [string] $Config,
+        [string] $SourcePath,
+        [string] $Base,
+        [string] $Instance
+    )
+
+    if ($Repository -cnotmatch '^[A-Za-z0-9_.-]+/([A-Za-z0-9_.-]+)$' -or
+        $Matches[1] -cin @('.', '..')) {
+        throw 'Expected the calling repository in owner/name form.'
+    }
+    $repositoryName = $Matches[1]
+    if ($Method -cnotin @('binstall', 'install', 'path')) { throw "Unsupported installation method: $Method" }
+    $workspacePath = (Get-Item -LiteralPath $Workspace -ErrorAction Stop).FullName
+    $tempPath = (Get-Item -LiteralPath $TempDirectory -ErrorAction Stop).FullName
+    Assert-WorkflowTemporaryDirectory -Directory $tempPath -Checkout $workspacePath
+    if ([string]::IsNullOrEmpty($WorkingDirectory)) { $WorkingDirectory = '.' }
+    $configurationRoot = Resolve-WorkflowPath -Base $workspacePath -Path $WorkingDirectory -Within $workspacePath
+    # Keep the measured repository's basename consistent with the caller checkout.
+    # This preserves the core's directory-derived project identity when no ID is explicit.
+    $checkoutPath = Join-Path '.bench-history' $repositoryName
+    $measuredRoot = Join-Path $workspacePath $checkoutPath
+    $workingPath = Resolve-WorkflowPath -Base $measuredRoot -Path $WorkingDirectory -Within $measuredRoot
+    $configPath = if ([string]::IsNullOrEmpty($Config)) {
+        Join-Path -Path $configurationRoot -ChildPath '.cargo' -AdditionalChildPath 'bench_history.toml'
+    }
+    else { Resolve-WorkflowPath -Base $configurationRoot -Path $Config -Within $workspacePath }
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        throw "Reusable workflows require a committed benchmark configuration: $configPath"
+    }
+    if ($Method -eq 'path') {
+        if ([string]::IsNullOrWhiteSpace($SourcePath)) { throw 'Path installation requires source-path.' }
+        $SourcePath = Resolve-WorkflowPath -Base $workspacePath -Path $SourcePath -Within $workspacePath
+        if (-not (Test-Path -LiteralPath $SourcePath -PathType Container)) {
+            throw "The selected tool source directory does not exist: $SourcePath"
+        }
+    }
+    elseif (-not [string]::IsNullOrEmpty($SourcePath)) {
+        throw 'source-path applies only to path installation.'
+    }
+
+    $runRoot = Join-Path $tempPath "cbh-workflow-$([guid]::NewGuid().ToString('N'))"
+    $null = New-Item -ItemType Directory -Path $runRoot
+    $receiptDirectory = Join-Path $runRoot 'collection'
+    $receiptsDirectory = Join-Path $runRoot 'receipts'
+    $null = New-Item -ItemType Directory -Path $receiptDirectory, $receiptsDirectory
+    $cacheDirectory = ''
+    if ($Instance) {
+        $cacheParent = Join-Path $tempPath 'cbh-history-cache'
+        $cacheDirectory = Resolve-WorkflowPath -Base $cacheParent -Path $Instance -Within $cacheParent
+        if ($cacheDirectory -eq $cacheParent -or $Instance -match '[\\/]') {
+            throw 'The prepared instance must identify one cache directory.'
+        }
+    }
+    return @{
+        'install-method' = $Method
+        'source-path' = $SourcePath
+        'checkout-path' = $checkoutPath
+        'workspace' = $workspacePath
+        'measured-root' = $measuredRoot
+        'base' = $Base
+        'working-directory' = $workingPath
+        'config' = $configPath
+        'scripts-path' = $PSScriptRoot
+        'run-root' = $runRoot
+        'tools-root' = Join-Path $runRoot 'tools'
+        'state-path' = Join-Path $runRoot 'workflow.json'
+        'receipt-file' = Join-Path $receiptDirectory 'receipt.json'
+        'receipts-directory' = $receiptsDirectory
+        'machine-key-file' = Join-Path $runRoot 'machine-key.txt'
+        'machine-key-directory' = Join-Path $runRoot 'keys'
+        'cache-directory' = $cacheDirectory
+    }
+}
+
+function Install-WorkflowTool {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param([Parameter(Mandatory)] $Context, [Parameter(Mandatory)] $Manifest)
+
+    if (-not (Test-Path -LiteralPath $Context['working-directory'] -PathType Container)) {
+        throw "The measured checkout is unavailable: $($Context['working-directory'])"
+    }
+    if ($Context['base']) {
+        # The invocation's full merge checkout owns the frozen base object even
+        # if a remote branch moved. Local fetch needs no persisted Git credential.
+        Invoke-WorkflowProcess -FilePath git -Arguments @(
+            '-C', $Context['measured-root'], 'fetch', '--no-tags', '--no-write-fetch-head',
+            '--', $Context['workspace'], $Context['base'])
+    }
+    $selected = @($Manifest.tools | Where-Object role -CEQ 'companion')
+    if ($selected.Count -ne 1) { throw 'Workflow bootstrap requires one declared companion.' }
+    $parameters = @{
+        Manifest = $Manifest
+        Method = $Context['install-method']
+        Root = $Context['tools-root']
+        Packages = @($selected.name)
+    }
+    if ($parameters.Method -eq 'path') { $parameters.SourcePath = $Context['source-path'] }
+    $executables = Install-ActionTools @parameters
+    return @{ companion = $executables[$selected[0].name] }
+}
+
+function Invoke-WorkflowOperation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('prepare', 'receipt', 'reconcile')] [string] $Operation,
+        [Parameter(Mandatory)] $Context,
+        [ValidateSet('history', 'pr')] [string] $Flow,
+        [string] $Platforms,
+        [string] $Exclude,
+        [string] $Instance,
+        [string] $Head,
+        [string] $Platform,
+        [string] $MachineKey,
+        [string] $RunId = $env:GITHUB_RUN_ID,
+        [string] $RunAttempt = $env:GITHUB_RUN_ATTEMPT,
+        [string] $OutputPath = $env:GITHUB_OUTPUT
+    )
+
+    $arguments = switch ($Operation) {
+        'prepare' {
+            $inputPath = Join-Path $Context['run-root'] 'preparation.json'
+            @{
+                'working-directory' = $Context['working-directory']
+                'config' = $Context['config']
+                'platforms' = $Platforms
+                'exclude' = $Exclude
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $inputPath -Encoding utf8
+            @('prepare-workflow', '--flow', $Flow, '--inputs-file', $inputPath,
+                '--github-output', $OutputPath)
+        }
+        'receipt' {
+            $MachineKey | Set-Content -LiteralPath $Context['machine-key-file'] -Encoding utf8 -NoNewline
+            @('--instance', $Instance, 'collection-receipt', '--run-id', $RunId,
+                '--run-attempt', $RunAttempt, '--head', $Head, '--platform', $Platform,
+                '--machine-key-file', $Context['machine-key-file'], '--file', $Context['receipt-file'])
+        }
+        'reconcile' {
+            @('--instance', $Instance, '--verbose', 'prepare-analysis', '--run-id', $RunId,
+                '--head', $Head, '--expected-platforms', $Platforms,
+                '--receipts-dir', $Context['receipts-directory'],
+                '--machine-key-dir', $Context['machine-key-directory'], '--github-output', $OutputPath)
+        }
+    }
+    Invoke-WorkflowProcess -FilePath $Context['companion'] -Arguments $arguments
+    if ($Operation -eq 'prepare') {
+        Assert-WorkflowPreparationOutput -Path $OutputPath -Flow $Flow
+    }
+}
+
+function Assert-WorkflowPreparationOutput {
+    param([string] $Path, [string] $Flow)
+    # Validate the machine-readable handoff, not the Rust scope decision. Missing
+    # output must fail preparation rather than silently skip every dependent job.
+    $outputs = @{}
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if (-not $line) { continue }
+        if ($line -cnotmatch '^([a-z][a-z0-9-]*)=(.*)$' -or $outputs.ContainsKey($Matches[1])) {
+            throw 'Malformed or duplicate workflow preparation output.'
+        }
+        $outputs[$Matches[1]] = $Matches[2]
+    }
+    # These jobs already selected same-repository work. A helper policy skip must
+    # never be interpreted as an empty affected scope and trigger publication.
+    if ($outputs.ContainsKey('skipped') -and $outputs['skipped'] -cne 'false') {
+        throw 'Workflow preparation skipped the selected invocation; no collection or publication is permitted.'
+    }
+    foreach ($key in @('instance', 'matrix', 'expected-platforms', 'collection-job-prefix', 'head', 'base')) {
+        if (-not $outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($outputs[$key])) {
+            throw "Workflow preparation did not emit $key."
+        }
+    }
+    if (-not $outputs.ContainsKey('skip-all') -or $outputs['skip-all'] -cnotin @('true', 'false') -or
+        -not $outputs.ContainsKey('packages')) {
+        throw 'Workflow preparation did not emit explicit scope-selection outputs.'
+    }
+    if (($outputs['skip-all'] -ceq 'false') -eq [string]::IsNullOrWhiteSpace($outputs['packages'])) {
+        throw 'Package scope presence disagrees with its work-selection output.'
+    }
+    if ($Flow -eq 'history' -and $outputs['base'] -cne $outputs['head']) {
+        throw 'History preparation must select its frozen head as the analysis base.'
+    }
+}
+
+function Resolve-WorkflowPath {
+    param([string] $Base, [string] $Path, [string] $Within)
+    if ([IO.Path]::IsPathRooted($Path) -or $Path -match '^[A-Za-z]:|^[\\/]' -or
+        $Path.Contains("`n") -or $Path.Contains("`r")) {
+        throw 'Workflow paths must be single-line paths relative to the caller checkout.'
+    }
+    $Path = $Path.Replace('\', [IO.Path]::DirectorySeparatorChar)
+    $resolved = [IO.Path]::GetFullPath($Path, $Base)
+    $prefix = [IO.Path]::TrimEndingDirectorySeparator($Within) + [IO.Path]::DirectorySeparatorChar
+    # Require exact lexical containment rather than assuming the directory's
+    # case sensitivity from the host operating system.
+    if ($resolved -cne $Within -and -not $resolved.StartsWith($prefix, [StringComparison]::Ordinal)) {
+        throw "Workflow path escapes its checkout: $Path"
+    }
+    return $resolved
+}
+
+function Assert-WorkflowTemporaryDirectory {
+    param([string] $Directory, [string] $Checkout)
+    $checkoutItem = Get-Item -LiteralPath $Checkout
+    if ($checkoutItem.LinkType) { $checkoutItem = $checkoutItem.ResolveLinkTarget($true) }
+    $item = Get-Item -LiteralPath $Directory
+    while ($null -ne $item) {
+        if ($item.LinkType) { $item = $item.ResolveLinkTarget($true) }
+        # Conservatively reject case-only overlaps without assuming filesystem case behavior.
+        if ($item.FullName -ieq $checkoutItem.FullName) {
+            throw 'Workflow temporary files must be outside the caller checkout.'
+        }
+        $item = $item.Parent
+    }
+}
+
+function Invoke-WorkflowProcess {
+    param([string] $FilePath, [string[]] $Arguments)
+    $PSNativeCommandUseErrorActionPreference = $false
+    $global:LASTEXITCODE = 0
+    & $FilePath @Arguments | Out-Host
+    if ($global:LASTEXITCODE -ne 0) {
+        throw "Workflow command $FilePath failed with exit code $global:LASTEXITCODE."
+    }
+}
+
+Export-ModuleMember -Function Initialize-WorkflowContext, Install-WorkflowTool, Invoke-WorkflowOperation

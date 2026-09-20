@@ -19,12 +19,6 @@
       "binary": "cargo-bench-history-faker",
       "version": "0.2.9",
       "role": "fixture"
-    },
-    {
-      "name": "cargo-detect-package",
-      "binary": "cargo-detect-package",
-      "version": "1.0.34",
-      "role": "scope"
     }
   ],
   "targets": [

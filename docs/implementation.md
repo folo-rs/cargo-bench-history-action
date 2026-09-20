@@ -50,7 +50,7 @@ The companion's `--version` must match the receipt and its `action --help` must
 succeed. The main binary has no version flag, so its evidence is the fresh Cargo
 record, executable presence and successful help invocations for the commands used
 by the runtime. This is not an independently reported executable version.
-Fixture/scope behavioral checks belong to their CI canaries.
+Faker behavioral checks belong to the CI canaries.
 
 Path mode reads the selected package's `cargo metadata --no-deps --locked`
 output for its version and required binary target. It always force-installs that
@@ -85,6 +85,62 @@ Both cache actions use that output, so neither restore nor save occurs. The swit
 is an environment-level CI control, not a public action input or tool-version
 override; unset or `false` preserves ordinary published-installation caching.
 
+## Reusable workflow orchestration
+
+`history.yml` and `pr.yml` use `$/` self references to run this repository's root
+action and private `workflow-tools` composite at the called workflow's exact commit.
+The caller's checkout cannot select that implementation. This requires GitHub.com
+runner 2.336.0 or newer; actionlint's unsupported self/queue diagnostics have exact,
+path-scoped compatibility exceptions.
+
+The private adapter checks out the invocation at `GITHUB_WORKSPACE` for configuration,
+the fixed setup hook and optional Folo tool sources. A separate full-history checkout
+holds the frozen measurement head. Its basename matches the repository name to retain
+directory-derived project identity. The PR's frozen base can be fetched from the
+invocation checkout locally, without a persisted Git credential or another network
+authentication path.
+
+`Workflow.psm1` owns only paths, installer selection, input files and native argument
+vectors. It calls the same `Install-ActionTools` used by the root and availability
+gate. Private tools use fresh job-local roots; ordinary root-action cache behavior is
+unchanged. The workflow state file contains invocation wiring, not another version
+or executable-identity manifest.
+
+The installed companion's `prepare-workflow` boundary resolves the canonical project,
+real head/base, matrix and concrete benchmark package scope. History selects workspace
+benchmarks and PR selects affected packages, derived from the flow rather than a
+separate scope input. Detection uses the companion's library
+dependency, not another installed executable. The wrapper verifies the required
+machine-readable `skip-all` handoff so missing scope outputs cannot silently skip the graph.
+`cargo-detect-package` follows the companion's Rust dependency/version plan; it has
+no separate executable pin or installer role in the action manifest. The faker
+remains independently pinned because the real collection canaries execute it.
+History uses the prepared inventory to gate empty work, then retains root workspace
+collection with the configured exclusions. PR receives the concrete nonempty prepared
+package list and does not also forward exclusions, which preparation already applied.
+Namespace normalization, dependency closure, report classification and receipt
+selection remain Rust-owned.
+
+Workflow-wide cancellation uses repository, flow and configuration location plus the
+PR or commit identity available before any job runs. Job queues and sink serialization
+use the canonical project identity from preparation. This avoids a nested workflow
+layer solely to obtain a preparation-dependent workflow-level concurrency group.
+
+Collection records a receipt only after the root command and actual key capture
+succeed. Artifacts include project, flow, platform and attempt; downloads use the
+authenticated run-wide view. Rust accepts the downloader's flat single-receipt and
+per-artifact-directory layouts, enforcing the same identity/latest-job checks for both.
+The analysis cache has a stable instance-scoped path outside both checkouts. History
+can save read-cache updates; PR analysis only restores them.
+
+Successful analysis, report upload and disposition publication share a job.
+The workflow forwards `publication-state` into the named command and never interprets
+`notable` or `can-clear` as a substitute. Empty PR scope uses the explicit flag on the
+inconclusive command. Terminal jobs retain a reused preflight's original attempt;
+otherwise they use the current attempt, with the companion enforcing exact ownership.
+A failed history collection can both preserve a useful partial report and file its
+separate workflow-failure alert.
+
 ## Validation and release boundaries
 
 Pester covers installer argument construction, exact manifest selection, cache
@@ -113,7 +169,7 @@ every promised monorepo `.zip` and sibling `.sha256`, checks the downloaded arch
 against the sidecar, and calls the same installer used by consumers. Sidecar checking
 is explicit CI behavior, not an assumed cargo-binstall verification feature.
 The shared installer verifies exact crates.io identities using fresh Cargo receipts.
-The companion also reports its version directly; main/faker/scope lack a dedicated version interface,
+The companion also reports its version directly; main/faker lack a dedicated version interface,
 so their identity is receipt-based, with their used contracts exercised separately.
 
 Root-action method canaries disable installation-cache restore/save with
@@ -125,7 +181,7 @@ skipped. A future/unpublished pin or missing archive is a real failure.
 
 Canaries create a committed, dependency-free Cargo workspace outside the action and
 Folo checkouts. The workspace is virtual: its benchmark belongs to a non-root member,
-because package detection deliberately excludes workspace-root packages. The root
+because the companion's package-ownership library excludes workspace-root packages. The root
 still owns the benchmark-history configuration. Its small benchmark entry point
 delegates to the manifest-pinned faker, producing deterministic engine output without
 wall-clock measurements.
@@ -147,8 +203,8 @@ the report assertions fail.
 
 ### Version readiness and reconciliation
 
-Release-bearing paths are `action.yml`/`action.yaml`, `release.json`, scripts and
-workflow definitions. The CI-only exemptions are `scripts/Release.psm1`,
+Release-bearing paths are `action.yml`/`action.yaml`, `release.json`, scripts,
+private actions and workflow definitions. The CI-only exemptions are `scripts/Release.psm1`,
 `scripts/Publish-Release.ps1`, `scripts/Install-Canary.ps1` and the `test.yml`,
 `install-tools.yml`, `release.yml` workflows. New scripts and consumer reusable
 workflows are release-bearing by default. Documentation, tests and the canary

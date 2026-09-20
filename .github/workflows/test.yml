@@ -48,6 +48,9 @@ jobs:
           if (-not (Get-Module -ListAvailable Pester | Where-Object Version -EQ 5.7.1)) {
             Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
           }
+          if (-not (Get-Module -ListAvailable powershell-yaml | Where-Object Version -EQ 0.4.12)) {
+            Install-Module powershell-yaml -RequiredVersion 0.4.12 -Scope CurrentUser -Force
+          }
           Import-Module Pester -RequiredVersion 5.7.1
           $result = Invoke-Pester -Path .\tests -PassThru -Output Detailed
           if ($result.Result -ne 'Passed') { throw 'Pester failed.' }
