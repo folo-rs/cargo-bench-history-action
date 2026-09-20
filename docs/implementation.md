@@ -88,12 +88,12 @@ override; unset or `false` preserves ordinary published-installation caching.
 ## Reusable workflow orchestration
 
 `history.yml` and `pr.yml` use `$/` self references to run this repository's root
-action and private `workflow-tools` composite at the called workflow's exact commit.
+action and internal `workflow-tools` composite at the called workflow's exact commit.
 The caller's checkout cannot select that implementation. This requires GitHub.com
 runner 2.336.0 or newer; actionlint's unsupported self/queue diagnostics have exact,
 path-scoped compatibility exceptions.
 
-The private adapter checks out the invocation at `GITHUB_WORKSPACE` for configuration,
+The `workflow-tools` composite checks out the invocation at `GITHUB_WORKSPACE` for configuration,
 the fixed setup hook and optional Folo tool sources. A separate full-history checkout
 holds the frozen measurement head. Its basename matches the repository name to retain
 directory-derived project identity. The PR's frozen base can be fetched from the
