@@ -177,22 +177,30 @@ function Assert-WorkflowPreparationOutput {
         }
         $outputs[$Matches[1]] = $Matches[2]
     }
-    # These jobs already selected same-repository work. A helper policy skip must
-    # never be interpreted as an empty affected scope and trigger publication.
-    if ($outputs.ContainsKey('skipped') -and $outputs['skipped'] -cne 'false') {
-        throw 'Workflow preparation skipped the selected invocation; no collection or publication is permitted.'
-    }
-    foreach ($key in @('instance', 'matrix', 'expected-platforms', 'collection-job-prefix', 'head', 'base')) {
+    foreach ($key in @('instance', 'matrix', 'expected-platforms', 'collection-job-prefix')) {
         if (-not $outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($outputs[$key])) {
             throw "Workflow preparation did not emit $key."
         }
     }
-    if (-not $outputs.ContainsKey('skip-all') -or $outputs['skip-all'] -cnotin @('true', 'false') -or
+    if (-not $outputs.ContainsKey('skipped') -or $outputs['skipped'] -cnotin @('true', 'false') -or
+        -not $outputs.ContainsKey('skip-all') -or $outputs['skip-all'] -cnotin @('true', 'false') -or
         -not $outputs.ContainsKey('packages')) {
         throw 'Workflow preparation did not emit explicit scope-selection outputs.'
     }
     if (($outputs['skip-all'] -ceq 'false') -eq [string]::IsNullOrWhiteSpace($outputs['packages'])) {
         throw 'Package scope presence disagrees with its work-selection output.'
+    }
+    if ($outputs['skipped'] -ceq 'true') {
+        if ($outputs['skip-all'] -cne 'true' -or
+            -not $outputs.ContainsKey('skip-reason') -or [string]::IsNullOrWhiteSpace($outputs['skip-reason'])) {
+            throw 'Policy skip must carry an explicit reason and no collection work.'
+        }
+        return
+    }
+    foreach ($key in @('head', 'base')) {
+        if (-not $outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($outputs[$key])) {
+            throw "Workflow preparation did not emit $key."
+        }
     }
     if ($Flow -eq 'history' -and $outputs['base'] -cne $outputs['head']) {
         throw 'History preparation must select its frozen head as the analysis base.'

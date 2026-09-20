@@ -28,6 +28,7 @@ Describe 'Workflow adapter' {
                     'head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
                     "base=$(if ($Flow -eq 'pr') { 'b' * 40 } else { 'a' * 40 })"
                     'skip-all=false'
+                    'skipped=false'
                     "packages=$Packages"
                 )
                 Set-Content -LiteralPath $Path -Value $lines
@@ -257,12 +258,20 @@ Describe 'Workflow adapter' {
                 { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow pr } | Should -Throw
             }
 
-            It 'never projects a fork policy skip into empty-scope publication' {
+            It 'accepts a separate policy skip without requiring collection commits' {
                 Write-PreparationFixture -Path $script:operationOutput -Flow pr -Packages ''
-                (Get-Content -LiteralPath $script:operationOutput) -replace '^skip-all=false$', 'skip-all=true' |
+                (Get-Content -LiteralPath $script:operationOutput | Where-Object { $_ -notmatch '^(head|base)=' }) `
+                    -replace '^skip-all=false$', 'skip-all=true' -replace '^skipped=false$', 'skipped=true' |
                     Set-Content -LiteralPath $script:operationOutput
-                Add-Content -LiteralPath $script:operationOutput -Value @(
-                    'skipped=true', 'skip-reason=fork-pull-request')
+                Add-Content -LiteralPath $script:operationOutput -Value 'skip-reason=fork-pull-request'
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow pr } | Should -Not -Throw
+            }
+
+            It 'rejects a policy skip that claims collection work' {
+                Write-PreparationFixture -Path $script:operationOutput -Flow pr
+                (Get-Content -LiteralPath $script:operationOutput) -replace '^skipped=false$', 'skipped=true' |
+                    Set-Content -LiteralPath $script:operationOutput
+                Add-Content -LiteralPath $script:operationOutput -Value 'skip-reason=fork-pull-request'
                 { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow pr } | Should -Throw
             }
 

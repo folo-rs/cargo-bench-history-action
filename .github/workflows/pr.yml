@@ -110,6 +110,7 @@ jobs:
       base: ${{ steps.prepare.outputs.base }}
       packages: ${{ steps.prepare.outputs.packages }}
       skip-all: ${{ steps.prepare.outputs.skip-all }}
+      skipped: ${{ steps.prepare.outputs.skipped }}
     steps:
       - name: Prepare implementation and caller context
         id: context
@@ -134,7 +135,7 @@ jobs:
 
   preflight:
     needs: prepare
-    if: inputs.publish && needs.prepare.outputs.skip-all == 'false'
+    if: inputs.publish && needs.prepare.outputs.skipped != 'true' && needs.prepare.outputs.skip-all == 'false'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -175,7 +176,7 @@ jobs:
   collect:
     needs: prepare
     # An empty computed scope is not the root action's empty/workspace selection.
-    if: needs.prepare.outputs.skip-all == 'false'
+    if: needs.prepare.outputs.skipped != 'true' && needs.prepare.outputs.skip-all == 'false'
     name: ${{ needs.prepare.outputs.collection-job-prefix }}:${{ matrix.platform }}
     runs-on: ${{ matrix.platform }}
     # Permit the hosted-runner ceiling for repositories with long benchmark suites.
@@ -241,6 +242,7 @@ jobs:
     if: >-
       !cancelled()
       && needs.prepare.result == 'success'
+      && needs.prepare.outputs.skipped != 'true'
       && needs.prepare.outputs.skip-all == 'false'
       && (needs.collect.result == 'success' || needs.collect.result == 'failure')
     runs-on: ubuntu-latest
@@ -347,7 +349,7 @@ jobs:
 
   empty-scope:
     needs: prepare
-    if: inputs.publish && needs.prepare.outputs.skip-all == 'true'
+    if: inputs.publish && needs.prepare.outputs.skipped != 'true' && needs.prepare.outputs.skip-all == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -383,6 +385,7 @@ jobs:
     needs: [prepare, preflight, collect, analyze]
     if: >-
       always() && inputs.publish && needs.prepare.result == 'success'
+      && needs.prepare.outputs.skipped != 'true'
       && needs.prepare.outputs.skip-all == 'false'
       && needs.analyze.result != 'success'
       && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
