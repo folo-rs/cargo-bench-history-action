@@ -61,6 +61,11 @@ checkout, the platform matrix, rerun-safe collection, receipt reconciliation,
 analysis, report upload, publication and concurrency. The `closed` event cancels
 superseded PR work without starting another collection.
 
+Collection defaults to x64 Linux and Windows. Apple Silicon macOS is also supported;
+set `platforms: ubuntu-latest,windows-latest,macos-latest` in each caller's `with:`
+block to include it. The workspace's benchmarks and their dependencies must support
+the selected runners. Intel macOS is not a supported release target.
+
 Under default GitHub settings, the platform restricts effective fork-PR
 `id-token` permission after YAML evaluation. Approval to run does not grant that
 permission. This server-enforced restriction prevents a default fork PR from

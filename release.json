@@ -33,6 +33,12 @@
       "rust_target": "x86_64-pc-windows-msvc",
       "os": "Windows",
       "arch": "X64"
+    },
+    {
+      "runner": "macos-latest",
+      "rust_target": "aarch64-apple-darwin",
+      "os": "macOS",
+      "arch": "ARM64"
     }
   ]
 }

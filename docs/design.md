@@ -51,6 +51,13 @@ for each expected platform. A failed retry cannot reuse older success; an untouc
 successful leg remains eligible. No successful collection is an execution failure,
 not an empty-scope verdict.
 
+Supported collection runners are x64 Linux, x64 Windows and Apple Silicon macOS,
+with Linux and Windows selected by default. Callers can include `macos-latest`
+through `platforms` when their benchmarks support it. The release manifest defines
+the supported native targets; each participates in real source and published-tool
+installation checks. Folo's own performance-collection policy is separate from the
+platforms supported by the reusable workflows.
+
 Partial collection can produce a qualified report while failed jobs remain visible.
 Analysis, report upload and publication share a job so the publication consumes
 the matching summary/JSON and upload URL. Publication forwards the companion's
