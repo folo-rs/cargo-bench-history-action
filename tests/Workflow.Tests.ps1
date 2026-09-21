@@ -24,6 +24,17 @@ Describe 'Workflow adapter' {
                     'instance=project'
                     'matrix={"platform":["linux","windows"]}'
                     'expected-platforms=linux,windows'
+                )
+                if ($Flow -eq 'backfill') {
+                    $lines += @(
+                        "from=$('a' * 40)"
+                        "to=$('b' * 40)"
+                        'skipped=false'
+                    )
+                    Set-Content -LiteralPath $Path -Value $lines
+                    return
+                }
+                $lines += @(
                     'collection-job-prefix=cbh-collect:project'
                     'head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
                     "base=$(if ($Flow -eq 'pr') { 'b' * 40 } else { 'a' * 40 })"
@@ -210,6 +221,124 @@ Describe 'Workflow adapter' {
                 }
             }
 
+            It 'forwards backfill refs only as JSON data to the dedicated preparation flow' {
+                Mock Invoke-WorkflowProcess {
+                    param($Arguments)
+                    Write-PreparationFixture -Path $Arguments[-1] -Flow backfill
+                } -ParameterFilter { $FilePath -ceq 'fixture-companion' }
+                # Ref interpretation, including option-looking input, belongs to Rust.
+                $from = '--all'
+                $to = 'topic/with''quote;$literal'
+                Invoke-WorkflowOperation prepare $script:operationContext -Flow backfill -Platforms linux `
+                    -From $from -To $to -Exclude excluded -OutputPath $script:operationOutput
+                $inputs = Get-Content (Join-Path $script:operationContext['run-root'] 'preparation.json') -Raw | ConvertFrom-Json -AsHashtable
+                $inputs.Keys | Sort-Object | Should -Be @('config', 'exclude', 'from', 'platforms', 'to', 'working-directory')
+                $inputs.from | Should -BeExactly $from
+                $inputs.to | Should -BeExactly $to
+                $inputs.exclude | Should -BeExactly 'excluded'
+                $inputs['working-directory'] | Should -BeExactly $script:operationContext['working-directory']
+                $inputs.config | Should -BeExactly $script:operationContext['config']
+                Should -Invoke Invoke-WorkflowProcess -Times 1 -Exactly -ParameterFilter {
+                    $Arguments[0] -ceq 'prepare-workflow' -and $Arguments[1] -ceq '--flow' -and
+                    $Arguments[2] -ceq 'backfill' -and $Arguments.Count -eq 7
+                }
+            }
+
+            It 'does not add range inputs to <flow> preparation' -ForEach @(
+                @{ flow = 'history' }, @{ flow = 'pr' }
+            ) {
+                Mock Invoke-WorkflowProcess {
+                    param($Arguments)
+                    Write-PreparationFixture -Path $Arguments[-1] -Flow $Arguments[2]
+                }
+                Invoke-WorkflowOperation prepare $script:operationContext -Flow $flow -From old -To new `
+                    -OutputPath $script:operationOutput
+                $inputs = Get-Content (Join-Path $script:operationContext['run-root'] 'preparation.json') -Raw | ConvertFrom-Json -AsHashtable
+                $inputs.Keys | Sort-Object | Should -Be @('config', 'exclude', 'platforms', 'working-directory')
+                Should -Invoke Invoke-WorkflowProcess -Times 0 -ParameterFilter { $FilePath -ceq 'git' }
+            }
+
+            It 'compares branch names ordinally and creates only absent non-symbolic origin aliases' {
+                Mock Invoke-WorkflowProcess {
+                    "refs/heads/Main`t$('a' * 40)`t"
+                    "refs/heads/keep`t$('a' * 40)`t"
+                    "refs/remotes/origin/HEAD`t$('b' * 40)`trefs/remotes/origin/main"
+                    "refs/remotes/origin/alias`t$('b' * 40)`trefs/remotes/origin/main"
+                    "refs/remotes/origin/keep`t$('b' * 40)`t"
+                    "refs/remotes/origin/main`t$('b' * 40)`t"
+                } -ParameterFilter { $CaptureOutput }
+                Initialize-WorkflowBackfillBranch $script:operationContext['working-directory']
+                Should -Invoke Invoke-WorkflowProcess -Times 1 -Exactly -ParameterFilter {
+                    $Arguments[2] -ceq 'update-ref' -and $Arguments[3] -ceq '--no-deref' -and
+                    $Arguments[4] -ceq 'refs/heads/main' -and $Arguments[5] -ceq ('b' * 40) -and
+                    $Arguments[6] -ceq ('0' * 40)
+                }
+                Should -Invoke Invoke-WorkflowProcess -Times 2 -Exactly
+            }
+
+            It 'does not hide failed or malformed Git branch enumeration' -ForEach @(
+                @{ failure = 'process' }, @{ failure = 'output' }
+            ) {
+                $script:branchFailure = $failure
+                Mock Invoke-WorkflowProcess {
+                    if ($script:branchFailure -eq 'process') { throw 'Git failed' }
+                    'malformed ref record'
+                } -ParameterFilter { $CaptureOutput }
+                { Invoke-WorkflowOperation prepare $script:operationContext -Flow backfill `
+                        -From main~1 -To main -OutputPath $script:operationOutput } | Should -Throw
+                Should -Invoke Invoke-WorkflowProcess -Times 0 -ParameterFilter { -not $CaptureOutput }
+            }
+
+            It 'accepts historical work without any current-HEAD package selection' {
+                Write-PreparationFixture -Path $script:operationOutput -Flow backfill
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Not -Throw
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow history } | Should -Throw
+            }
+
+            It 'rejects missing or empty backfill success output <key>' -ForEach @(
+                @{ key = 'instance' }, @{ key = 'matrix' }, @{ key = 'expected-platforms' }
+                @{ key = 'from' }, @{ key = 'to' }, @{ key = 'skipped' }
+            ) {
+                Write-PreparationFixture -Path $script:operationOutput -Flow backfill
+                $remaining = @(Get-Content $script:operationOutput | Where-Object { -not $_.StartsWith("$key=") })
+                Set-Content $script:operationOutput $remaining
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+                Add-Content $script:operationOutput "$key="
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+            }
+
+            It 'rejects invalid frozen ranges and unexpected scope or report outputs' -ForEach @(
+                @{ key = 'from'; value = 'HEAD~1' }, @{ key = 'to'; value = 'main' }
+                @{ key = 'from'; value = 'abc123' }, @{ key = 'to'; value = 'g' * 40 }
+                @{ key = 'skipped'; value = 'False' }, @{ key = 'skipped'; value = 'maybe' }
+                @{ key = 'head'; value = 'a' * 40 }, @{ key = 'base'; value = 'a' * 40 }
+                @{ key = 'packages'; value = '' }, @{ key = 'skip-all'; value = 'false' }
+                @{ key = 'collection-job-prefix'; value = 'prefix' }, @{ key = 'outcome'; value = 'success' }
+                @{ key = 'skip-reason'; value = 'fork-pull-request' }
+            ) {
+                Write-PreparationFixture -Path $script:operationOutput -Flow backfill
+                @(Get-Content $script:operationOutput | Where-Object { -not $_.StartsWith("$key=") }) |
+                    Set-Content $script:operationOutput
+                Add-Content $script:operationOutput "$key=$value"
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+            }
+
+            It 'accepts a reasoned backfill policy skip only without range or scope claims' {
+                Write-PreparationFixture -Path $script:operationOutput -Flow backfill
+                @(Get-Content $script:operationOutput | Where-Object { $_ -notmatch '^(from|to)=' }) `
+                    -replace '^skipped=false$', 'skipped=true' | Set-Content $script:operationOutput
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+                Add-Content $script:operationOutput 'skip-reason=fork-pull-request'
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Not -Throw
+                Add-Content $script:operationOutput "to=$('b' * 40)"
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+            }
+
+            It 'does not accept the history scope handoff as backfill preparation' {
+                Write-PreparationFixture -Path $script:operationOutput
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+            }
+
             It 'binds a real key file to frozen collection identity without parsing reports' {
                 Invoke-WorkflowOperation receipt $script:operationContext -Instance project -Head head -Platform linux `
                     -MachineKey 0123456789abcdef -RunId 42 -RunAttempt 3
@@ -219,6 +348,15 @@ Describe 'Workflow adapter' {
                             '--run-id', '42', '--run-attempt', '3', '--head', 'head', '--platform', 'linux',
                             '--machine-key-file', $script:operationContext['machine-key-file'], '--file', $script:operationContext['receipt-file']) -join '|')
                 }
+            }
+
+            It 'does not alias branches for <operation> even when flow is backfill' -ForEach @(
+                @{ operation = 'receipt' }, @{ operation = 'reconcile' }
+            ) {
+                Invoke-WorkflowOperation $operation $script:operationContext -Flow backfill `
+                    -Instance project -Head head -Platform linux -MachineKey key -RunId 42 `
+                    -OutputPath $script:operationOutput
+                Should -Invoke Invoke-WorkflowProcess -Times 0 -ParameterFilter { $FilePath -ceq 'git' }
             }
 
             It 'hands original artifact roots and expected platforms to the Rust reconciler' {

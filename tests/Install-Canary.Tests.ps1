@@ -26,6 +26,7 @@ Describe 'Shared real installation gate orchestration' {
         Mock Get-FileHash { [pscustomobject] @{ Hash = 'hash' } }
         Mock Assert-CanaryChecksum {}
         Mock Install-ActionTools {}
+        Mock Invoke-BackfillPreparationCanary {}
         Mock Test-ActionToolInstallation { $true }
         Mock Get-ActionToolPath { param($Package) $Package }
         Mock Invoke-CanaryExecutable {
@@ -48,6 +49,9 @@ Describe 'Shared real installation gate orchestration' {
         }
         Should -Invoke Invoke-WebRequest -Times 6 -Exactly
         Should -Invoke Test-ActionToolInstallation -Times 3 -Exactly
+        Should -Invoke Invoke-BackfillPreparationCanary -Times 1 -Exactly -ParameterFilter {
+            $Companion -ceq 'companion' -and $Root.EndsWith('backfill-preparation')
+        }
     }
 
     It 'uses registry installation without a prebuilt-only switch for the install leg' {
@@ -90,6 +94,12 @@ Describe 'Shared real installation gate orchestration' {
         Mock Test-ActionToolInstallation { $false } -ParameterFilter { $Package -eq 'faker' }
         { Invoke-InstallationCanary -Method install -RustTarget test-target -Root $TestDrive -ManifestPath manifest } | Should -Throw
         Should -Invoke Test-ActionToolInstallation -Times 1 -Exactly -ParameterFilter { $Package -eq 'faker' }
+    }
+
+    It 'fails availability when an installed companion lacks the backfill preparation contract' {
+        Mock Invoke-BackfillPreparationCanary { throw 'unsupported preparation flow' }
+        { Invoke-InstallationCanary -Method binstall -RustTarget test-target -Root $TestDrive -ManifestPath manifest } | Should -Throw
+        Should -Invoke Invoke-BackfillPreparationCanary -Times 1 -Exactly
     }
 }
 

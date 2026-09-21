@@ -1,6 +1,6 @@
 # Benchmark history action
 
-Reusable workflows collect benchmark history and report changes without requiring
+Reusable workflows collect or backfill benchmark history and report changes without requiring
 each repository to maintain the collection matrix, receipt handoff and publication
 job graph. The root composite action remains available for custom job graphs.
 
@@ -82,7 +82,8 @@ including when surviving platforms produce a useful qualified report.
 
 ### Workflow configuration
 
-Both callers require the Azure identifiers as strings. Optional inputs are:
+All reusable workflows require the Azure identifiers as strings. Backfill also
+requires `from` and `to`. Optional inputs are:
 
 | Input | Default | Purpose |
 | --- | --- | --- |
@@ -97,10 +98,12 @@ Both callers require the Azure identifiers as strings. Optional inputs are:
 | `features` | Empty | Additional CSV Cargo features. |
 | `install-method` | `binstall` | `binstall`, `install` or `path` for every required tool. |
 | `source-path` | Empty | Folo source directory relative to the invocation checkout, required only for `path`. |
-| `publish` | `true` | Enable all GitHub lifecycle/report writes. Analysis and artifacts remain available when false. |
+| `publish` | `true` | History/PR only: enable all GitHub lifecycle/report writes. Analysis and artifacts remain available when false. |
 | `since` | Main tool default | History-only look-back window. |
+| `ignore-errors` | `false` | Backfill only: continue past individual commit build or benchmark failures; infrastructure errors remain failures. |
+| `best-effort` | `false` | Backfill only: opt into ignoring a matrix job failure or hosted-runner timeout. |
 
-The workflows return `outcome`, `publication-state`, `notable`, `regressions`,
+History and PR return `outcome`, `publication-state`, `notable`, `regressions`,
 `partial-platform-coverage`, `report-artifact-id` and `report-artifact-url` when
 analysis runs. They do not expose paths belonging to another job. `publication-state`
 is `findings`, `clean` or `inconclusive`; the underlying analysis outcome remains
@@ -115,6 +118,56 @@ Source-mode Folo callers set `install-method: path` and `source-path: .`. Every 
 comes from that invocation checkout, while PR measurements use a separate checkout
 of the frozen real head. The workflow and its internal actions stay on the same
 selected action revision through GitHub's `$/` self-repository references.
+
+### Backfill historical measurements
+
+Use the reusable backfill workflow for an explicit first-parent range. The caller
+chooses its trigger and range; the workflow resolves both endpoints to full commit
+SHAs before starting its platform matrix.
+
+```yaml
+name: Backfill benchmark history
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Start of the backfill range
+        required: true
+        type: string
+      to:
+        description: End of the backfill range
+        required: true
+        type: string
+jobs:
+  backfill:
+    permissions:
+      contents: read
+      id-token: write
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v1
+    with:
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      from: ${{ inputs.from }}
+      to: ${{ inputs.to }}
+```
+
+Backfill measures the workspace in each historical checkout, applying `exclude`
+without requiring a package list or benchmarks at the invocation head. Each
+platform checks out the frozen `to` commit with full history; configuration, the
+fixed setup hook and optional source-built tools still come from the invocation
+checkout. The main tool validates and traverses the first-parent range.
+
+Existing measurements are always skipped, making repeat invocations resumable.
+Invocations queue without cancelling or replacing earlier backfills; work also
+queues by canonical project and platform, including when configuration paths alias
+the same project. Each matrix job has the hosted six-hour budget, and a failed
+platform does not cancel the other platforms. Failures remain visible unless the
+caller explicitly opts into `best-effort`; `ignore-errors` independently controls
+the main tool's per-commit failure policy.
+
+Backfill performs no analysis or publication, uploads no receipts or reports, and
+has no public outputs. Fork-origin, `pull_request_target` and closed PR events start
+no work, matching history's event selection.
 
 ## Prerequisites
 

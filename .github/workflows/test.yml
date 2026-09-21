@@ -115,14 +115,19 @@ jobs:
           working-directory: ${{ steps.fixture.outputs.workspace }}
           local-path: ${{ steps.fixture.outputs.store }}
           bench: synthetic
-      - name: Hand off the collected machine key
+      - name: Backfill and resume on the collection runner
+        id: backfill
         if: steps.collect.outputs.skipped != 'true'
         shell: pwsh
         env:
+          CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
+          CANARY_STORE: ${{ steps.fixture.outputs.store }}
           CANARY_KEYS: ${{ steps.fixture.outputs.machine-keys }}
           CANARY_KEY: ${{ steps.collect.outputs.machine-key }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:CANARY_KEY)) { throw 'Collection emitted no machine key.' }
+          & .\tests\Invoke-BackfillCanary.ps1 -Workspace $env:CANARY_WORKSPACE `
+            -Store $env:CANARY_STORE -MachineKey $env:CANARY_KEY
           Set-Content -LiteralPath (Join-Path $env:CANARY_KEYS 'machine-key.txt') -Value $env:CANARY_KEY
       - name: Analyze with source-built tools
         id: analyze

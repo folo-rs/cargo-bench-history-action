@@ -1,7 +1,9 @@
 # Benchmark-history action
 
-Public history and PR workflows own the collection matrix, evidence handoff,
-analysis, artifacts and publication. Consumers choose triggers and supply their
+Public `history.yml`, `pr.yml` and `backfill.yml` workflows own benchmark execution.
+History and PR own the collection matrix, evidence handoff, analysis, artifacts and
+publication; backfill owns a frozen historical range and its collection matrix.
+Consumers choose triggers and supply their
 Azure identifiers; the default interface does not require a manual package list.
 History measures the workspace, while PR preparation selects affected benchmark
 packages and dependents before applying exclusions. There is no separate consumer
@@ -76,6 +78,31 @@ lifecycle and alert writes without suppressing analysis or report artifacts.
 The shared workflows use the selected workflow commit's own root action and
 internal adapter, independently of the caller checkout. Runtime files and
 measurement checkouts are separate from invocation configuration and tool sources.
+
+### Historical backfill
+
+Backfill requires explicit `from` and `to` refs and freezes them to full commit
+SHAs during preparation. Preparation uses the real calling event head; execution
+uses the frozen range tip with full history. Configuration, the fixed setup hook
+and source-built tools belong to the invocation checkout, not a historical commit.
+The main tool owns first-parent range validation and traversal.
+
+Each historical commit supplies its own workspace benchmark inventory. There is
+no current-head scope detection, empty-scope skip, public package list or scope
+selector. The common exclusions and benchmark/feature options apply to historical
+collection. Existing measurements are always skipped for resumable reruns.
+
+Every invocation queues without cancellation or replacement. Canonical project and
+platform queues also serialize callers using different configuration paths for the
+same project. Each platform has the hosted six-hour ceiling and does not cancel
+other matrix legs on failure. `ignore-errors` defaults to false and controls the
+core's per-commit build/benchmark failure policy, not infrastructure failures.
+`best-effort` separately defaults to false and explicitly opts into ignoring a
+matrix job failure or hosted-runner timeout.
+
+Backfill uses history's same-repository/open-event work selection and excludes
+`pull_request_target`. It produces no receipts, analysis, reports, publication or
+public workflow outputs.
 
 ## Installation
 

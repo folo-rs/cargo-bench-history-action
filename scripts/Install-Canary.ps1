@@ -42,6 +42,11 @@ function Invoke-CanaryExecutable {
     return ($output -join "`n")
 }
 
+function Invoke-BackfillPreparationCanary {
+    param([string] $Companion, [string] $Root)
+    & (Join-Path $PSScriptRoot '..\tests\Assert-BackfillPreparation.ps1') -Companion $Companion -Root $Root
+}
+
 function Invoke-InstallationCanary {
     param([string] $Method, [string] $RustTarget, [string] $Root, [string] $ManifestPath)
     Import-Module (Join-Path $PSScriptRoot 'Tools.psm1') -Force
@@ -99,6 +104,10 @@ function Invoke-InstallationCanary {
             if ([string]::IsNullOrWhiteSpace($key)) { throw 'Main tool did not emit a machine key.' }
         }
     }
+    $companion = @($manifest.tools | Where-Object role -CEQ 'companion')[0]
+    Invoke-BackfillPreparationCanary `
+        -Companion (Get-ActionToolPath -Manifest $manifest -Root $installRoot -Package $companion.name) `
+        -Root (Join-Path $Root 'backfill-preparation')
     # The workflow's fixture executes the faker contract from this installation,
     # followed by fresh root-action collect/analyze invocations.
     if ($env:GITHUB_OUTPUT) {

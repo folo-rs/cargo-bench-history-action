@@ -62,6 +62,8 @@ $global:LASTEXITCODE = 0
         Should -Invoke Get-ActionToolPath -Times 1 -Exactly -ParameterFilter { $Package -ceq 'faker' }
         $environment = Get-Content $env:GITHUB_ENV
         $environment | Should -Contain "ACTION_CANARY_FAKER=$script:faker"
+        Should -Invoke git -Times 2 -Exactly -ParameterFilter { 'commit' -cin $args }
+        Should -Invoke git -Times 1 -Exactly -ParameterFilter { 'commit' -cin $args -and '--allow-empty' -cin $args }
     }
 
     It 'uses an existing gate installation without installing another tool' {
