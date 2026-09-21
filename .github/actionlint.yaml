@@ -1,0 +1,19 @@
+paths:
+  .github/workflows/history.yml:
+    ignore:
+      # reason: GitHub supports self-repository references on runner 2.336.0+, while actionlint 1.7.12 does not.
+      # https://github.blog/changelog/2026-07-30-reference-same-repository-actions-with-self-repository-syntax/
+      - '^specifying action "\$/(?:\.github/actions/workflow-tools)?" in invalid format because ref is missing\. available formats are "\{owner\}/\{repo\}@\{ref\}" or "\{owner\}/\{repo\}/\{path\}@\{ref\}"$'
+      # reason: GitHub supports queue: max; remove when https://github.com/rhysd/actionlint/issues/657 is resolved.
+      - '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'
+  .github/workflows/pr.yml:
+    ignore:
+      # reason: GitHub supports the same exact self references as history.yml; other action diagnostics stay fatal.
+      - '^specifying action "\$/(?:\.github/actions/workflow-tools)?" in invalid format because ref is missing\. available formats are "\{owner\}/\{repo\}@\{ref\}" or "\{owner\}/\{repo\}/\{path\}@\{ref\}"$'
+      # reason: GitHub supports queue: max; remove when https://github.com/rhysd/actionlint/issues/657 is resolved.
+      - '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'
+  .github/workflows/release.yml:
+    ignore:
+      # reason: GitHub supports queue: max, but actionlint does not recognize the queue key.
+      # Remove this exception when https://github.com/rhysd/actionlint/issues/657 is resolved.
+      - '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'

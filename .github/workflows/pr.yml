@@ -1,0 +1,421 @@
+name: Reusable PR benchmark history
+
+on:
+  workflow_call:
+    inputs:
+      azure-client-id:
+        description: Managed identity client ID for the configured Azure store.
+        required: true
+        type: string
+      azure-tenant-id:
+        description: Tenant ID for the configured Azure identity.
+        required: true
+        type: string
+      platforms:
+        description: Comma-separated collection runner labels.
+        type: string
+        default: ubuntu-latest,windows-latest
+      working-directory:
+        description: Project directory relative to the caller repository.
+        type: string
+        default: .
+      config:
+        description: Configuration path relative to the invocation project directory.
+        type: string
+        default: ''
+      exclude:
+        description: Comma-separated packages excluded after scope expansion.
+        type: string
+        default: ''
+      bench:
+        description: Comma-separated Cargo benchmark targets.
+        type: string
+        default: ''
+      best-of:
+        description: Measurement repetitions, retaining each metric's minimum.
+        type: number
+        default: 1
+      all-features:
+        description: Enable all Cargo features during collection.
+        type: boolean
+        default: true
+      no-default-features:
+        description: Disable default Cargo features during collection.
+        type: boolean
+        default: false
+      features:
+        description: Comma-separated Cargo features.
+        type: string
+        default: ''
+      install-method:
+        description: Install every tool with binstall, install or path.
+        type: string
+        default: binstall
+      source-path:
+        description: Folo source directory relative to the invocation checkout, for path mode only.
+        type: string
+        default: ''
+      publish:
+        description: Publish PR lifecycle and report updates.
+        type: boolean
+        default: true
+    outputs:
+      outcome:
+        description: Successful analysis outcome, when analysis ran.
+        value: ${{ jobs.analyze.outputs.outcome }}
+      publication-state:
+        description: Checked report disposition, when analysis ran.
+        value: ${{ jobs.analyze.outputs.publication-state }}
+      notable:
+        description: Whether analysis reported findings.
+        value: ${{ jobs.analyze.outputs.notable }}
+      regressions:
+        description: Regression count from the report.
+        value: ${{ jobs.analyze.outputs.regressions }}
+      partial-platform-coverage:
+        description: Whether an expected collection platform is missing.
+        value: ${{ jobs.analyze.outputs.partial-platform-coverage }}
+      report-artifact-id:
+        description: Uploaded report artifact ID.
+        value: ${{ jobs.analyze.outputs.report-artifact-id }}
+      report-artifact-url:
+        description: Uploaded report artifact URL.
+        value: ${{ jobs.analyze.outputs.report-artifact-url }}
+
+permissions: {}
+
+# A closed event still enters this group to cancel superseded work, but runs no
+# jobs. Ref: ../../docs/implementation.md#reusable-workflow-orchestration.
+concurrency:
+  group: cbh-pr-${{ github.repository }}-${{ inputs.working-directory }}-${{ inputs.config }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    # This selects intended work. GitHub, not an editable predicate, enforces the
+    # default fork permission cap after YAML evaluation.
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.action != 'closed'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      instance: ${{ steps.prepare.outputs.instance }}
+      matrix: ${{ steps.prepare.outputs.matrix }}
+      expected-platforms: ${{ steps.prepare.outputs.expected-platforms }}
+      collection-job-prefix: ${{ steps.prepare.outputs.collection-job-prefix }}
+      head: ${{ steps.prepare.outputs.head }}
+      base: ${{ steps.prepare.outputs.base }}
+      packages: ${{ steps.prepare.outputs.packages }}
+      skip-all: ${{ steps.prepare.outputs.skip-all }}
+      skipped: ${{ steps.prepare.outputs.skipped }}
+    steps:
+      - name: Prepare implementation and caller context
+        id: context
+        uses: $/.github/actions/workflow-tools
+        with:
+          head: ${{ github.event.pull_request.head.sha }}
+          base: ${{ github.event.pull_request.base.sha }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+      - name: Resolve benchmark scope and matrix
+        id: prepare
+        shell: pwsh
+        env:
+          CBH_SCRIPTS: ${{ steps.context.outputs.scripts-path }}
+          CBH_WORKFLOW_STATE: ${{ steps.context.outputs.state-path }}
+          CBH_FLOW: pr
+          CBH_PLATFORMS: ${{ inputs.platforms }}
+          CBH_EXCLUDE: ${{ inputs.exclude }}
+        run: '& (Join-Path $env:CBH_SCRIPTS Run-Workflow.ps1) -Stage prepare'
+
+  preflight:
+    needs: prepare
+    if: inputs.publish && needs.prepare.outputs.skipped != 'true' && needs.prepare.outputs.skip-all == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: cbh-comment-${{ github.repository }}-${{ needs.prepare.outputs.instance }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+      queue: max
+    outputs:
+      owner-attempt: ${{ steps.owner.outputs.attempt }}
+    steps:
+      - id: context
+        uses: $/.github/actions/workflow-tools
+        with:
+          head: ${{ needs.prepare.outputs.head }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+      - name: Record pending benchmark work
+        uses: $/
+        with:
+          command: publish-comment-preflight
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ steps.context.outputs.source-path }}
+          working-directory: ${{ steps.context.outputs.working-directory }}
+          config: ${{ steps.context.outputs.config }}
+          pr-number: ${{ github.event.pull_request.number }}
+          packages: ${{ needs.prepare.outputs.packages }}
+          head: ${{ needs.prepare.outputs.head }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+      - name: Preserve preflight ownership across partial reruns
+        id: owner
+        shell: pwsh
+        run: '"attempt=$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT'
+
+  collect:
+    needs: prepare
+    # An empty computed scope is not the root action's empty/workspace selection.
+    if: needs.prepare.outputs.skipped != 'true' && needs.prepare.outputs.skip-all == 'false'
+    name: ${{ needs.prepare.outputs.collection-job-prefix }}:${{ matrix.platform }}
+    runs-on: ${{ matrix.platform }}
+    # Permit the hosted-runner ceiling for repositories with long benchmark suites.
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    concurrency:
+      group: cbh-collect-${{ github.repository }}-${{ needs.prepare.outputs.instance }}-pr-${{ matrix.platform }}
+      cancel-in-progress: false
+      queue: max
+    env:
+      AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+      AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+    steps:
+      - id: context
+        uses: $/.github/actions/workflow-tools
+        with:
+          head: ${{ needs.prepare.outputs.head }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+          benchmark-setup: 'true'
+      - name: Collect the prepared nonempty package scope
+        id: collect
+        uses: $/
+        with:
+          command: collect
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ steps.context.outputs.source-path }}
+          working-directory: ${{ steps.context.outputs.working-directory }}
+          config: ${{ steps.context.outputs.config }}
+          packages: ${{ needs.prepare.outputs.packages }}
+          bench: ${{ inputs.bench }}
+          best-of: ${{ inputs.best-of }}
+          all-features: ${{ inputs.all-features }}
+          no-default-features: ${{ inputs.no-default-features }}
+          features: ${{ inputs.features }}
+          on-existing: skip
+      - name: Record successful collection evidence
+        shell: pwsh
+        env:
+          CBH_SCRIPTS: ${{ steps.context.outputs.scripts-path }}
+          CBH_WORKFLOW_STATE: ${{ steps.context.outputs.state-path }}
+          CBH_INSTANCE: ${{ needs.prepare.outputs.instance }}
+          CBH_HEAD: ${{ needs.prepare.outputs.head }}
+          CBH_PLATFORM: ${{ matrix.platform }}
+          CBH_MACHINE_KEY: ${{ steps.collect.outputs.machine-key }}
+        run: '& (Join-Path $env:CBH_SCRIPTS Run-Workflow.ps1) -Stage receipt'
+      - name: Upload the receipt, not measurement storage
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-bench-history-collection-${{ needs.prepare.outputs.instance }}-${{ matrix.platform }}-${{ github.run_attempt }}
+          path: ${{ steps.context.outputs.receipt-file }}
+          if-no-files-found: error
+
+  analyze:
+    needs: [prepare, preflight, collect]
+    if: >-
+      !cancelled()
+      && needs.prepare.result == 'success'
+      && needs.prepare.outputs.skipped != 'true'
+      && needs.prepare.outputs.skip-all == 'false'
+      && (needs.collect.result == 'success' || needs.collect.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      pull-requests: write
+    concurrency:
+      group: cbh-comment-${{ github.repository }}-${{ needs.prepare.outputs.instance }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+      queue: max
+    env:
+      AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+      AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+    outputs:
+      outcome: ${{ steps.analyze.outputs.outcome }}
+      publication-state: ${{ steps.analyze.outputs.publication-state }}
+      notable: ${{ steps.analyze.outputs.notable }}
+      regressions: ${{ steps.analyze.outputs.regressions }}
+      partial-platform-coverage: ${{ steps.analyze.outputs.partial-platform-coverage }}
+      report-artifact-id: ${{ steps.reports.outputs.artifact-id }}
+      report-artifact-url: ${{ steps.reports.outputs.artifact-url }}
+    steps:
+      - id: context
+        uses: $/.github/actions/workflow-tools
+        with:
+          head: ${{ needs.prepare.outputs.head }}
+          base: ${{ needs.prepare.outputs.base }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+          instance: ${{ needs.prepare.outputs.instance }}
+      - name: Restore history reads without saving a PR cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.context.outputs.cache-directory }}
+          key: bench-history-pr-${{ needs.prepare.outputs.instance }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: bench-history-${{ needs.prepare.outputs.instance }}-
+      - name: Download collection attempts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pr-bench-history-collection-${{ needs.prepare.outputs.instance }}-*
+          path: ${{ steps.context.outputs.receipts-directory }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+      - name: Reconcile latest platform attempts
+        id: collection
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CBH_SCRIPTS: ${{ steps.context.outputs.scripts-path }}
+          CBH_WORKFLOW_STATE: ${{ steps.context.outputs.state-path }}
+          CBH_INSTANCE: ${{ needs.prepare.outputs.instance }}
+          CBH_HEAD: ${{ needs.prepare.outputs.head }}
+          CBH_PLATFORMS: ${{ needs.prepare.outputs.expected-platforms }}
+        run: '& (Join-Path $env:CBH_SCRIPTS Run-Workflow.ps1) -Stage reconcile'
+      - name: Compare frozen PR head and base
+        id: analyze
+        uses: $/
+        with:
+          command: analyze-pr
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ steps.context.outputs.source-path }}
+          working-directory: ${{ steps.context.outputs.working-directory }}
+          config: ${{ steps.context.outputs.config }}
+          context: ${{ needs.prepare.outputs.head }}
+          base: ${{ needs.prepare.outputs.base }}
+          cache: ${{ steps.context.outputs.cache-directory }}
+          machine-keys: ${{ steps.context.outputs.machine-key-directory }}
+          expected-platforms: ${{ needs.prepare.outputs.expected-platforms }}
+          completed-platforms: ${{ steps.collection.outputs.completed-platforms }}
+      - name: Upload the matching report bundle
+        id: reports
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-bench-history-report-${{ needs.prepare.outputs.instance }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          path: |
+            ${{ steps.analyze.outputs.report-markdown }}
+            ${{ steps.analyze.outputs.report-json }}
+            ${{ steps.analyze.outputs.report-summary }}
+      - name: Publish the checked report disposition
+        if: inputs.publish
+        uses: $/
+        with:
+          command: publish-comment-${{ steps.analyze.outputs.publication-state }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ steps.context.outputs.source-path }}
+          working-directory: ${{ steps.context.outputs.working-directory }}
+          config: ${{ steps.context.outputs.config }}
+          pr-number: ${{ github.event.pull_request.number }}
+          packages: ${{ needs.prepare.outputs.packages }}
+          body-file: ${{ steps.analyze.outputs.report-summary }}
+          report-file: ${{ steps.analyze.outputs.report-json }}
+          analyzed-sha: ${{ needs.prepare.outputs.head }}
+          artifact-url: ${{ steps.reports.outputs.artifact-url }}
+          expected-platforms: ${{ needs.prepare.outputs.expected-platforms }}
+          completed-platforms: ${{ steps.collection.outputs.completed-platforms }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+
+  empty-scope:
+    needs: prepare
+    if: inputs.publish && needs.prepare.outputs.skipped != 'true' && needs.prepare.outputs.skip-all == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: cbh-comment-${{ github.repository }}-${{ needs.prepare.outputs.instance }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - id: context
+        uses: $/.github/actions/workflow-tools
+        with:
+          head: ${{ needs.prepare.outputs.head }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+      - name: Explain an explicitly empty benchmark scope
+        uses: $/
+        with:
+          command: publish-comment-inconclusive
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ steps.context.outputs.source-path }}
+          working-directory: ${{ steps.context.outputs.working-directory }}
+          config: ${{ steps.context.outputs.config }}
+          empty-scope: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
+          head: ${{ needs.prepare.outputs.head }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+
+  failed:
+    needs: [prepare, preflight, collect, analyze]
+    if: >-
+      always() && inputs.publish && needs.prepare.result == 'success'
+      && needs.prepare.outputs.skipped != 'true'
+      && needs.prepare.outputs.skip-all == 'false'
+      && needs.analyze.result != 'success'
+      && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: cbh-comment-${{ github.repository }}-${{ needs.prepare.outputs.instance }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - id: context
+        uses: $/.github/actions/workflow-tools
+        with:
+          head: ${{ needs.prepare.outputs.head }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+      - name: Retire only this run's unfinished publication
+        uses: $/
+        with:
+          command: publish-comment-failed
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ steps.context.outputs.source-path }}
+          working-directory: ${{ steps.context.outputs.working-directory }}
+          config: ${{ steps.context.outputs.config }}
+          pr-number: ${{ github.event.pull_request.number }}
+          head: ${{ needs.prepare.outputs.head }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ needs.preflight.outputs.owner-attempt || github.run_attempt }}
+          conclusion: ${{ contains(needs.*.result, 'failure') && 'failure' || 'cancelled' }}

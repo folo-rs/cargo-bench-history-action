@@ -1,0 +1,101 @@
+name: Internal workflow context
+description: Prepare caller checkouts and declared tools for the shared workflow jobs.
+
+inputs:
+  head:
+    description: Frozen measurement commit selected from the calling event.
+    required: true
+  base:
+    description: Frozen PR base to make available in the measured repository.
+    default: ''
+  install-method:
+    description: Shared installation method.
+    default: binstall
+  source-path:
+    description: Tool source directory relative to the invocation checkout.
+    default: ''
+  working-directory:
+    description: Project directory relative to both caller checkouts.
+    default: .
+  config:
+    description: Configuration file relative to the invocation project directory.
+    default: ''
+  instance:
+    description: Prepared canonical project identity for the analysis cache.
+    default: ''
+  benchmark-setup:
+    description: Whether to run the fixed caller-owned benchmark setup hook.
+    default: 'false'
+
+outputs:
+  state-path:
+    value: ${{ steps.layout.outputs.state-path }}
+    description: Job-local argument and path state.
+  scripts-path:
+    value: ${{ steps.layout.outputs.scripts-path }}
+    description: Scripts from this action implementation, not the caller checkout.
+  working-directory:
+    value: ${{ steps.layout.outputs.working-directory }}
+    description: Measured project directory.
+  config:
+    value: ${{ steps.layout.outputs.config }}
+    description: Frozen invocation configuration file.
+  source-path:
+    value: ${{ steps.layout.outputs.source-path }}
+    description: Selected source checkout for path installation.
+  receipt-file:
+    value: ${{ steps.layout.outputs.receipt-file }}
+    description: Successful collection receipt destination.
+  receipts-directory:
+    value: ${{ steps.layout.outputs.receipts-directory }}
+    description: Artifact download destination.
+  machine-key-directory:
+    value: ${{ steps.layout.outputs.machine-key-directory }}
+    description: Reconciled machine-key destination.
+  cache-directory:
+    value: ${{ steps.layout.outputs.cache-directory }}
+    description: Stable instance-scoped analysis cache directory.
+  companion:
+    value: ${{ steps.install.outputs.companion }}
+    description: Installed companion executable.
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout invocation configuration and source
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Prepare isolated workflow paths
+      id: layout
+      shell: pwsh
+      env:
+        CBH_ACTION_PATH: ${{ github.action_path }}
+        CBH_WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
+      run: |
+        & (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'Run-Workflow.ps1') -Stage layout
+    - name: Checkout frozen measurement source
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ inputs.head }}
+        fetch-depth: 0
+        path: ${{ steps.layout.outputs.checkout-path }}
+        persist-credentials: false
+    - name: Prepare caller benchmark prerequisites
+      if: inputs.benchmark-setup == 'true' && hashFiles('.github/actions/bench-history-setup/action.yml') != ''
+      uses: ./.github/actions/bench-history-setup
+    - name: Bootstrap official cargo-binstall
+      if: inputs.install-method == 'binstall' || inputs.install-method == ''
+      uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
+      with:
+        version: 1.23.0
+    - name: Install declared workflow tools
+      id: install
+      shell: pwsh
+      env:
+        CBH_ACTION_PATH: ${{ github.action_path }}
+        CBH_WORKFLOW_STATE: ${{ steps.layout.outputs.state-path }}
+      run: |
+        & (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'Run-Workflow.ps1') -Stage install

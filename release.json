@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "version": "1.0.0",
+  "tools": [
+    {
+      "name": "cargo-bench-history",
+      "binary": "cargo-bench-history",
+      "version": "0.2.14",
+      "role": "tool"
+    },
+    {
+      "name": "cargo-bench-history-github",
+      "binary": "cargo-bench-history-github",
+      "version": "0.2.7",
+      "role": "companion"
+    },
+    {
+      "name": "cargo-bench-history-faker",
+      "binary": "cargo-bench-history-faker",
+      "version": "0.2.9",
+      "role": "fixture"
+    }
+  ],
+  "targets": [
+    {
+      "runner": "ubuntu-latest",
+      "rust_target": "x86_64-unknown-linux-gnu",
+      "os": "Linux",
+      "arch": "X64"
+    },
+    {
+      "runner": "windows-latest",
+      "rust_target": "x86_64-pc-windows-msvc",
+      "os": "Windows",
+      "arch": "X64"
+    },
+    {
+      "runner": "macos-latest",
+      "rust_target": "aarch64-apple-darwin",
+      "os": "macOS",
+      "arch": "ARM64"
+    }
+  ]
+}

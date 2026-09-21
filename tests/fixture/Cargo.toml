@@ -1,0 +1,9 @@
+[workspace]
+# The companion's ownership query deliberately excludes workspace-root packages.
+members = ["packages/action_canary"]
+resolver = "3"
+
+[profile.bench]
+# This is a process bridge to the faker, not a measured benchmark.
+opt-level = 0
+debug = false
