@@ -117,14 +117,53 @@ function Install-WorkflowTool {
     return @{ companion = $executables[$selected[0].name] }
 }
 
+function Initialize-WorkflowBackfillBranch {
+    param([string] $WorkingDirectory)
+    # A SHA checkout leaves fetched branches under origin. Expose missing local
+    # names without moving HEAD or changing ordinary Git ref resolution.
+    # Ref: docs/implementation.md, "Reusable workflow orchestration".
+    $lines = @(Invoke-WorkflowProcess -FilePath git -CaptureOutput -Arguments @(
+            '-C', $WorkingDirectory, 'for-each-ref', '--format=%(refname)%09%(objectname)%09%(symref)',
+            'refs/heads/', 'refs/remotes/origin/'))
+    $references = @(foreach ($line in $lines) {
+            if ($line -cnotmatch '^(refs/(?:heads|remotes/origin)/[^\t]+)\t([0-9a-f]+)\t(.*)$') {
+                throw 'Malformed Git branch enumeration output.'
+            }
+            @{ name = $Matches[1]; object = $Matches[2]; symbolic = $Matches[3] }
+        })
+    $heads = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($reference in $references) {
+        if ($reference.name.StartsWith('refs/heads/', [StringComparison]::Ordinal)) {
+            $null = $heads.Add($reference.name)
+        }
+    }
+    $originPrefix = 'refs/remotes/origin/'
+    foreach ($reference in $references) {
+        if (-not $reference.name.StartsWith($originPrefix, [StringComparison]::Ordinal) -or
+            $reference.name -ceq "${originPrefix}HEAD" -or $reference.symbolic) {
+            continue
+        }
+        $head = 'refs/heads/' + $reference.name.Substring($originPrefix.Length)
+        if ($heads.Contains($head)) { continue }
+        # Requiring an absent old ref also protects refs created after enumeration.
+        Invoke-WorkflowProcess -FilePath git -Arguments @(
+            '-C', $WorkingDirectory, 'update-ref', '--no-deref', $head,
+            $reference.object, ('0' * $reference.object.Length))
+    }
+}
+
 function Invoke-WorkflowOperation {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [ValidateSet('prepare', 'receipt', 'reconcile')] [string] $Operation,
         [Parameter(Mandatory)] $Context,
-        [ValidateSet('history', 'pr')] [string] $Flow,
+        [ValidateSet('history', 'pr', 'backfill')] [string] $Flow,
         [string] $Platforms,
         [string] $Exclude,
+        [string] $From,
+        [string] $To,
+        [string] $Lookback,
+        [string] $MinimumAge,
         [string] $Instance,
         [string] $Head,
         [string] $Platform,
@@ -137,12 +176,20 @@ function Invoke-WorkflowOperation {
     $arguments = switch ($Operation) {
         'prepare' {
             $inputPath = Join-Path $Context['run-root'] 'preparation.json'
-            @{
+            $inputs = @{
                 'working-directory' = $Context['working-directory']
                 'config' = $Context['config']
                 'platforms' = $Platforms
                 'exclude' = $Exclude
-            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $inputPath -Encoding utf8
+            }
+            if ($Flow -eq 'backfill') {
+                Initialize-WorkflowBackfillBranch -WorkingDirectory $Context['working-directory']
+                $inputs['from'] = $From
+                $inputs['to'] = $To
+                $inputs['lookback'] = $Lookback
+                $inputs['minimum-age'] = $MinimumAge
+            }
+            $inputs | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $inputPath -Encoding utf8
             @('prepare-workflow', '--flow', $Flow, '--inputs-file', $inputPath,
                 '--github-output', $OutputPath)
         }
@@ -177,10 +224,53 @@ function Assert-WorkflowPreparationOutput {
         }
         $outputs[$Matches[1]] = $Matches[2]
     }
-    foreach ($key in @('instance', 'matrix', 'expected-platforms', 'collection-job-prefix')) {
+    $commonKeys = @('instance', 'matrix', 'expected-platforms')
+    foreach ($key in $commonKeys) {
         if (-not $outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($outputs[$key])) {
             throw "Workflow preparation did not emit $key."
         }
+    }
+    if ($Flow -eq 'backfill') {
+        foreach ($key in @('skipped', 'has-work')) {
+            if (-not $outputs.ContainsKey($key) -or $outputs[$key] -cnotin @('true', 'false')) {
+                throw "Backfill preparation did not emit explicit $key."
+            }
+        }
+        $required = $commonKeys + @('skipped', 'has-work')
+        if ($outputs['skipped'] -ceq 'true') {
+            if ($outputs['has-work'] -cne 'false') {
+                throw 'Skipped backfill preparation cannot claim execution work.'
+            }
+            $required += 'skip-reason'
+        }
+        elseif ($outputs['has-work'] -ceq 'true') { $required += @('from', 'to') }
+        else { $required += 'no-work-reason' }
+        foreach ($key in $required) {
+            if (-not $outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($outputs[$key])) {
+                throw "Backfill preparation did not emit $key."
+            }
+        }
+        foreach ($key in $outputs.Keys) {
+            if ($key -cnotin $required) { throw "Unexpected backfill preparation output: $key." }
+        }
+        if ($outputs['skipped'] -ceq 'false' -and $outputs['has-work'] -ceq 'false' -and
+            $outputs['no-work-reason'] -cne 'no-eligible-commit') {
+            throw 'Unknown backfill no-work reason.'
+        }
+        if ($outputs['has-work'] -ceq 'true') {
+            # Only check the frozen wire representation. Git resolution and the
+            # first-parent range policy belong to the Rust tools.
+            foreach ($key in @('from', 'to')) {
+                if ($outputs[$key] -cnotmatch '^[0-9a-f]{40}$') {
+                    throw "Backfill preparation did not freeze $key to a full commit SHA."
+                }
+            }
+        }
+        return
+    }
+    if (-not $outputs.ContainsKey('collection-job-prefix') -or
+        [string]::IsNullOrWhiteSpace($outputs['collection-job-prefix'])) {
+        throw 'Workflow preparation did not emit collection-job-prefix.'
     }
     if (-not $outputs.ContainsKey('skipped') -or $outputs['skipped'] -cnotin @('true', 'false') -or
         -not $outputs.ContainsKey('skip-all') -or $outputs['skip-all'] -cnotin @('true', 'false') -or
@@ -240,13 +330,14 @@ function Assert-WorkflowTemporaryDirectory {
 }
 
 function Invoke-WorkflowProcess {
-    param([string] $FilePath, [string[]] $Arguments)
+    param([string] $FilePath, [string[]] $Arguments, [switch] $CaptureOutput)
     $PSNativeCommandUseErrorActionPreference = $false
     $global:LASTEXITCODE = 0
-    & $FilePath @Arguments | Out-Host
+    $output = if ($CaptureOutput) { & $FilePath @Arguments } else { & $FilePath @Arguments | Out-Host }
     if ($global:LASTEXITCODE -ne 0) {
         throw "Workflow command $FilePath failed with exit code $global:LASTEXITCODE."
     }
+    if ($CaptureOutput) { return $output }
 }
 
 Export-ModuleMember -Function Initialize-WorkflowContext, Install-WorkflowTool, Invoke-WorkflowOperation

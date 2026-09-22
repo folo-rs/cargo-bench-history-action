@@ -47,6 +47,10 @@ on:
         description: Comma-separated Cargo features.
         type: string
         default: ''
+      rustflags:
+        description: Additional measurement rustc arguments, using Cargo RUSTFLAGS whitespace splitting.
+        type: string
+        default: ''
       since:
         description: History look-back window; empty retains the main tool's default.
         type: string
@@ -218,6 +222,7 @@ jobs:
           all-features: ${{ inputs.all-features }}
           no-default-features: ${{ inputs.no-default-features }}
           features: ${{ inputs.features }}
+          rustflags: ${{ inputs.rustflags }}
           on-existing: skip
       - name: Record successful collection evidence
         shell: pwsh

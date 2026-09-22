@@ -35,6 +35,14 @@ The output file is the current step's `GITHUB_OUTPUT`. The temporary root is out
 the measured checkout. Publication uses the normal ambient GitHub repository/run
 context where an explicit execution-data input is absent.
 
+`rustflags` remains an opaque runtime string in this handoff. Workflows forward it
+only to root `collect` and `backfill` invocations, not to preparation, setup,
+installation, analysis or publication. PowerShell leaves both ambient flag
+variables and the input unchanged. The companion owns whitespace splitting,
+effective ambient flag selection and child-only `CARGO_ENCODED_RUSTFLAGS`
+composition, including the collection machine-key query. No workflow or script
+calculates or replaces compiler options.
+
 ### Installation identity and cache ownership
 
 The installer returns a map from package names to absolute executable paths below
@@ -87,8 +95,8 @@ override; unset or `false` preserves ordinary published-installation caching.
 
 ## Reusable workflow orchestration
 
-`history.yml` and `pr.yml` use `$/` self references to run this repository's root
-action and internal `workflow-tools` composite at the called workflow's exact commit.
+`history.yml`, `pr.yml` and `backfill.yml` use `$/` self references to run this
+repository's root action and internal `workflow-tools` composite at the called workflow's exact commit.
 The caller's checkout cannot select that implementation. This requires GitHub.com
 runner 2.336.0 or newer; actionlint's unsupported self/queue diagnostics have exact,
 path-scoped compatibility exceptions.
@@ -106,8 +114,9 @@ gate. Private tools use fresh job-local roots; ordinary root-action cache behavi
 unchanged. The workflow state file contains invocation wiring, not another version
 or executable-identity manifest.
 
-The installed companion's `prepare-workflow` boundary resolves the canonical project,
-real head/base, matrix and concrete benchmark package scope. History selects workspace
+The installed companion's `prepare-workflow` boundary resolves the canonical project
+and matrix. History and PR also resolve real head/base and concrete benchmark
+package scope. History selects workspace
 benchmarks and PR selects affected packages, derived from the flow rather than a
 separate scope input. Detection uses the companion's library
 dependency, not another installed executable. The wrapper verifies the required
@@ -123,10 +132,57 @@ package list and does not also forward exclusions, which preparation already app
 Namespace normalization, dependency closure, report classification and receipt
 selection remain Rust-owned.
 
-Workflow-wide cancellation uses repository, flow and configuration location plus the
+History/PR workflow-wide cancellation uses repository, flow and configuration location plus the
 PR or commit identity available before any job runs. Job queues and sink serialization
 use the canonical project identity from preparation. This avoids a nested workflow
 layer solely to obtain a preparation-dependent workflow-level concurrency group.
+
+Backfill preparation sends only `working-directory`, `config`, `platforms`,
+`exclude`, `from`, `to`, `lookback` and `minimum-age` to
+`prepare-workflow --flow backfill`. Empty values remain data for Rust to validate
+and interpret; PowerShell does not choose a mode, parse durations, read the clock
+or select historical commits. Rust validates explicit versus rolling inputs,
+resolves refs option-safely and calculates a rolling window from one injected
+clock snapshot. It does not inspect current-HEAD Cargo metadata or select packages.
+
+Backfill always emits `instance`, `matrix`, `expected-platforms`, `skipped` and
+`has-work`. A normal range has `skipped=false`, `has-work=true` and full-SHA `from`
+and `to`. No eligible automatic endpoint has `skipped=false`, `has-work=false`
+and `no-work-reason=no-eligible-commit`, without endpoints. A policy skip has
+`skipped=true`, `has-work=false` and `skip-reason`, without endpoints.
+The adapter rejects missing, malformed, unexpected or contradictory handoffs,
+including mixed reasons and ranges. Only non-skipped preparation with explicit
+work enables the execution matrix. History/PR preparation input and output shapes
+are unchanged.
+
+Backfill preparation checks out the real event head through `workflow-tools`.
+Only the backfill preparation operation exposes fetched `origin` branches as
+missing local branch refs: SHA-detached Actions checkouts otherwise retain those
+names only under `refs/remotes/origin/`. The adapter enumerates refs locally,
+compares names ordinally, ignores `origin/HEAD` and symbolic remote refs, and creates
+each missing `refs/heads/*` with `git update-ref` requiring an absent old ref.
+Existing local branches and tags remain untouched, as does the frozen detached
+HEAD. Enumeration, namespace conflicts and raced ref creation fail explicitly;
+there is no network fetch, force update or failed-resolution remapping. Rust still
+resolves caller expressions such as `main`, `refs/heads/main` and `main~1` through
+ordinary Git semantics and owns all range policy. History, PR and non-preparation
+operations do not perform this checkout wiring.
+
+Each matrix job then passes the prepared `to` SHA as that adapter's measurement
+head, fetching full history even if the original remote branch has moved.
+Invocation configuration, setup and source installation use the adapter unchanged.
+The root `backfill` command receives only the frozen range and common collection
+options, with `on-existing: skip`; rolling inputs never reach the explicit-range
+executor. First-parent validity and traversal stay in the
+main executable. The graph has no receipt, analysis, artifact or sink jobs.
+
+Backfill's `cbh-backfill-run` workflow queue groups repository/configuration
+locations independently of event, SHA or run identity. Its `cbh-backfill-work`
+job queues use canonical project/platform identities so aliased configurations
+cannot race. Distinct prefixes prevent a workflow from waiting on its own queue;
+both levels use `cancel-in-progress: false` and `queue: max`. Matrix fail-fast is
+disabled. `best-effort` binds only the backfill job's `continue-on-error`, while
+`ignore-errors` is passed independently to the core through the root action.
 
 Collection records a receipt only after the root command and actual key capture
 succeed. Artifacts include project, flow, platform and attempt; downloads use the
@@ -174,6 +230,23 @@ The shared installer verifies exact crates.io identities using fresh Cargo recei
 The companion also reports its version directly; main/faker lack a dedicated version interface,
 so their identity is receipt-based, with their used contracts exercised separately.
 
+The availability probe also runs `tests/Assert-BackfillPreparation.ps1` with the
+verified installed companion. This offline fixture retains historical benchmarks
+but removes the Cargo workspace at its invocation head, then runs the real adapter
+with `prepare-workflow --flow backfill`. Its frozen outputs must match the actual
+fixture commits without a scope skip. The checkout is detached with fetched
+`origin/main` but no local `main`; the real preparation boundary must resolve
+`main~1`, `main` and `refs/heads/main` while preserving HEAD and existing refs.
+The same adapter then exercises rolling selection, a rolling endpoint override
+and no eligible endpoint. Every request retains the real workflow's empty optional
+defaults so validation cannot mistake them for conflicting selections. Fixed
+historical Git dates keep this native smoke far from live-clock cutoff boundaries;
+injected-clock Rust tests own exact duration and calendar behavior.
+GitHub event environment is cleared only in
+the fixture's child processes: the action repository's event SHA is not a fixture
+commit. This contract probe neither installs tools nor substitutes for registry
+and archive availability.
+
 Root-action method canaries disable installation-cache restore/save with
 `CBH_ACTION_DISABLE_CACHE=true`. Their fresh installs exercise collection and
 analysis after the strict availability probe; ordinary consumer fallback remains
@@ -187,9 +260,22 @@ because the companion's package-ownership library excludes workspace-root packag
 still owns the benchmark-history configuration. Its small benchmark entry point
 delegates to the manifest-pinned faker, producing deterministic engine output without
 wall-clock measurements.
-No canary posts issues or comments. Same-repository assertions require a nonempty stored object under the emitted
-machine-key partition, parseable reports about the fixture commit, a nonempty series
-census and an honest insufficient-baseline outcome for its single history point.
+No canary posts issues or comments. The fixture has a working synthetic benchmark
+at both commits, with generated build output Git-ignored so historical worktrees
+store clean observations. Ordinary collection stores the tip, then the canary
+reuses that root invocation's installed main executable from its bootstrap state file to
+backfill the older commit on the same runner. No additional root action or tool
+installation is needed for backfill. The existing faker supplies deterministic
+measurements; Cargo remains offline.
+
+The probe decompresses local gzip objects and inspects JSON commit identities,
+clean status, nonempty results and machine-key provenance. It requires exactly
+the expected commits and preserves
+the tip's original object hash. Repeating backfill with a valid but nonexistent
+benchmark target must succeed while every stored file and hash stays unchanged,
+proving resumption skips execution as well as writes. Analysis then requires
+parseable reports about the tip, a nonempty series census and an honest
+insufficient-baseline outcome for this short history.
 Fork-triggered canaries instead assert the root action's explicit fork skip for both
 commands and reject any claimed collection or report evidence. This never bypasses
 published availability: every exact registry/prebuilt installation, asset check and

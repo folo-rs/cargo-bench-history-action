@@ -13,6 +13,30 @@ BeforeAll {
         if ($LASTEXITCODE -ne 0) { throw "Fixture Git failed: $text" }
         return ($text -join "`n")
     }
+
+    function Initialize-DetachedBranchFixture {
+        $null = Invoke-ContextGit $script:caller @('init', '--quiet', '-b', 'main')
+        $null = Invoke-ContextGit $script:caller @('add', '.')
+        $null = Invoke-ContextGit $script:caller @('commit', '--quiet', '-m', 'base')
+        $script:base = Invoke-ContextGit $script:caller @('rev-parse', 'HEAD')
+        $null = Invoke-ContextGit $script:caller @('commit', '--quiet', '--allow-empty', '-m', 'head')
+        $script:head = Invoke-ContextGit $script:caller @('rev-parse', 'HEAD')
+        $null = Invoke-ContextGit $script:caller @('update-ref', 'refs/remotes/origin/main', $script:head)
+        $null = Invoke-ContextGit $script:caller @('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
+        $null = Invoke-ContextGit $script:caller @('symbolic-ref', 'refs/remotes/origin/alias', 'refs/remotes/origin/main')
+        $null = Invoke-ContextGit $script:caller @('checkout', '--quiet', '--detach', $script:head)
+        $null = Invoke-ContextGit $script:caller @('update-ref', '-d', 'refs/heads/main', $script:head)
+        $null = Invoke-ContextGit $script:caller @('update-ref', 'refs/heads/preserved', $script:base)
+        $null = Invoke-ContextGit $script:caller @('update-ref', 'refs/remotes/origin/preserved', $script:head)
+        $null = Invoke-ContextGit $script:caller @('update-ref', 'refs/tags/release', $script:base)
+    }
+
+    function Initialize-DetachedBranchAlias {
+        & (Get-Module Workflow) {
+            param($Directory)
+            Initialize-WorkflowBackfillBranch $Directory
+        } $script:caller
+    }
 }
 
 Describe 'Workflow native handoff' {
@@ -24,7 +48,9 @@ Describe 'Workflow native handoff' {
         Set-Content (Join-Path $script:caller '.cargo\bench_history.toml') '[project]'
         $script:environment = @{}
         foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_REPOSITORY', 'RUNNER_TEMP', 'GITHUB_OUTPUT',
-                'CBH_WORKFLOW_INPUTS', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')) {
+                'CBH_WORKFLOW_INPUTS', 'CBH_WORKFLOW_STATE', 'CBH_FLOW', 'CBH_PLATFORMS',
+                'CBH_EXCLUDE', 'CBH_FROM', 'CBH_TO', 'CBH_LOOKBACK', 'CBH_MINIMUM_AGE',
+                'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')) {
             $script:environment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
         $env:GITHUB_WORKSPACE = $script:caller
@@ -68,6 +94,31 @@ Describe 'Workflow native handoff' {
         Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
     }
 
+    It 'passes range environment values only to the backfill preparation entry point' -ForEach @(
+        @{ flow = 'backfill' }, @{ flow = 'history' }, @{ flow = 'pr' }
+    ) {
+        $env:CBH_FLOW = $flow
+        $env:CBH_PLATFORMS = 'ubuntu-latest'
+        $env:CBH_EXCLUDE = 'excluded'
+        $env:CBH_FROM = 'topic/from'
+        $env:CBH_TO = 'topic/to'
+        $env:CBH_LOOKBACK = '14 days ago'
+        $env:CBH_MINIMUM_AGE = 'PT24H'
+        $env:CBH_WORKFLOW_STATE = Join-Path $temporary 'state.json'
+        '{"companion":"fixture"}' | Set-Content $env:CBH_WORKFLOW_STATE
+        Mock Invoke-WorkflowOperation {}
+        & $entry -Stage prepare
+        Should -Invoke Invoke-WorkflowOperation -Times 1 -Exactly -ParameterFilter {
+            $Operation -ceq 'prepare' -and $Flow -ceq $env:CBH_FLOW -and
+            $Platforms -ceq $env:CBH_PLATFORMS -and $Exclude -ceq $env:CBH_EXCLUDE -and
+            $(if ($Flow -eq 'backfill') {
+                    $From -ceq $env:CBH_FROM -and $To -ceq $env:CBH_TO -and
+                    $Lookback -ceq $env:CBH_LOOKBACK -and $MinimumAge -ceq $env:CBH_MINIMUM_AGE
+                }
+                else { -not $From -and -not $To -and -not $Lookback -and -not $MinimumAge })
+        }
+    }
+
     It 'fetches a missing frozen base locally without changing measured source' {
         $null = Invoke-ContextGit $caller @('init', '--quiet', '-b', 'main')
         $null = Invoke-ContextGit $caller @('add', '.')
@@ -87,5 +138,68 @@ Describe 'Workflow native handoff' {
         $null = Invoke-ContextGit $context['measured-root'] @('cat-file', '-e', "$base^{commit}")
         Invoke-ContextGit $context['measured-root'] @('rev-parse', 'HEAD') | Should -Be $head
         Invoke-ContextGit $context['measured-root'] @('status', '--porcelain') | Should -BeNullOrEmpty
+    }
+
+    It 'makes <reference> resolvable in a detached fetched checkout without moving HEAD' -ForEach @(
+        @{ reference = 'main'; ancestor = $false }
+        @{ reference = 'refs/heads/main'; ancestor = $false }
+        @{ reference = 'main~1'; ancestor = $true }
+    ) {
+        Initialize-DetachedBranchFixture
+        { Invoke-ContextGit $caller @('rev-parse', '--verify', '--end-of-options', "$reference^{commit}") } |
+            Should -Throw
+        Initialize-DetachedBranchAlias
+        Invoke-ContextGit $caller @('rev-parse', '--verify', '--end-of-options', "$reference^{commit}") |
+            Should -BeExactly $(if ($ancestor) { $base } else { $head })
+        Invoke-ContextGit $caller @('rev-parse', 'HEAD') | Should -BeExactly $head
+        Invoke-ContextGit $caller @('rev-parse', '--abbrev-ref', 'HEAD') | Should -BeExactly HEAD
+        Invoke-ContextGit $caller @('rev-parse', 'preserved') | Should -BeExactly $base
+        Invoke-ContextGit $caller @('rev-parse', 'release') | Should -BeExactly $base
+        Invoke-ContextGit $caller @('for-each-ref', '--format=%(refname)', 'refs/heads/') |
+            Should -BeExactly "refs/heads/main`nrefs/heads/preserved"
+        Invoke-ContextGit $caller @('symbolic-ref', 'refs/remotes/origin/HEAD') |
+            Should -BeExactly 'refs/remotes/origin/main'
+        Invoke-ContextGit $caller @('status', '--porcelain') | Should -BeNullOrEmpty
+        Initialize-DetachedBranchAlias
+        Invoke-ContextGit $caller @('rev-parse', 'refs/heads/main') | Should -BeExactly $head
+    }
+
+    It 'preserves existing local branch and tag resolution rather than replacing them with origin' {
+        Initialize-DetachedBranchFixture
+        $null = Invoke-ContextGit $caller @('update-ref', 'refs/heads/main', $base)
+        $null = Invoke-ContextGit $caller @('update-ref', 'refs/remotes/origin/release', $head)
+        Initialize-DetachedBranchAlias
+        Invoke-ContextGit $caller @('rev-parse', 'main') | Should -BeExactly $base
+        Invoke-ContextGit $caller @('rev-parse', 'refs/heads/release') | Should -BeExactly $head
+        # Two names intentionally coincide; inspect Git's ordinary tag precedence
+        # without its expected ambiguity diagnostic obscuring the resolved object ID.
+        Invoke-ContextGit $caller @('-c', 'core.warnAmbiguousRefs=false', 'rev-parse', 'release') |
+            Should -BeExactly $base
+        Invoke-ContextGit $caller @('rev-parse', 'refs/tags/release') | Should -BeExactly $base
+        Invoke-ContextGit $caller @('rev-parse', 'HEAD') | Should -BeExactly $head
+    }
+
+    It 'surfaces ref creation failures instead of hiding checkout wiring errors' {
+        Initialize-DetachedBranchFixture
+        $lock = Join-Path $caller '.git\refs\heads\main.lock'
+        Set-Content -LiteralPath $lock -Value ''
+        { Initialize-DetachedBranchAlias } | Should -Throw
+        Invoke-ContextGit $caller @('for-each-ref', '--format=%(refname)', 'refs/heads/main') |
+            Should -BeNullOrEmpty
+        Invoke-ContextGit $caller @('rev-parse', 'HEAD') | Should -BeExactly $head
+    }
+
+    It 'fails a raced creation without overwriting the newly created local ref' {
+        Initialize-DetachedBranchFixture
+        $script:nativeWorkflowProcess = & (Get-Module Workflow) { (Get-Command Invoke-WorkflowProcess).ScriptBlock }
+        Mock Invoke-WorkflowProcess -ModuleName Workflow {
+            param($FilePath, $Arguments, $CaptureOutput)
+            $references = & $script:nativeWorkflowProcess -FilePath $FilePath -Arguments $Arguments -CaptureOutput:$CaptureOutput
+            $null = Invoke-ContextGit $script:caller @('update-ref', 'refs/heads/main', $script:base)
+            return $references
+        } -ParameterFilter { $CaptureOutput }
+        { Initialize-DetachedBranchAlias } | Should -Throw
+        Invoke-ContextGit $caller @('rev-parse', 'refs/heads/main') | Should -BeExactly $base
+        Invoke-ContextGit $caller @('rev-parse', 'HEAD') | Should -BeExactly $head
     }
 }

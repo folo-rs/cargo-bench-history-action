@@ -34,13 +34,14 @@ Describe 'Honest fork policy evidence' {
     }
 }
 
-Describe 'Honest single-point analysis evidence' {
+Describe 'Honest short-history analysis evidence' {
     BeforeEach {
         $script:report = @{
             tip_commit = 'fixture'; tip_dirty = $false; mode = 'history'
-            outcome = 'insufficient_baseline'; notable = $false
+            outcome = 'insufficient_baseline'; notable = $false; runs = 2
             census = @{ in_scope = 1; judged = 0; coverage = 'nothing_judged' }
         }
+
         $script:outputs = @{
             outcome = 'insufficient_baseline'; 'publication-state' = 'inconclusive'
             'can-clear' = 'false'; 'partial-platform-coverage' = 'false'
@@ -56,6 +57,11 @@ Describe 'Honest single-point analysis evidence' {
         { Assert-CanaryAnalysis $report $outputs fixture } | Should -Throw
     }
 
+    It 'rejects a report missing the backfilled observation' {
+        $report.runs = 1
+        { Assert-CanaryAnalysis $report $outputs fixture } | Should -Throw
+    }
+
     It 'rejects a clean claim without a baseline' {
         $report.outcome = 'clean'
         { Assert-CanaryAnalysis $report $outputs fixture } | Should -Throw
@@ -68,5 +74,25 @@ Describe 'Honest single-point analysis evidence' {
 
     It 'rejects a report about a different commit' {
         { Assert-CanaryAnalysis $report $outputs another } | Should -Throw
+    }
+}
+
+Describe 'Backfill storage preservation' {
+    It 'allows only the new historical object while filling the range' {
+        { Assert-CanaryStorePreserved @{ head = 'original' } @{ head = 'original'; parent = 'new' } -AllowAdditional } |
+            Should -Not -Throw
+    }
+
+    It 'rejects replacing an existing measurement while filling the range' {
+        { Assert-CanaryStorePreserved @{ head = 'original' } @{ head = 'changed'; parent = 'new' } -AllowAdditional } |
+            Should -Throw
+    }
+
+    It 'requires identical hashes and file membership when resuming' {
+        $original = @{ head = 'head-hash'; parent = 'parent-hash' }
+        { Assert-CanaryStorePreserved $original $original.Clone() } | Should -Not -Throw
+        { Assert-CanaryStorePreserved $original @{ head = 'head-hash' } } | Should -Throw
+        { Assert-CanaryStorePreserved $original @{ head = 'head-hash'; parent = 'changed' } } | Should -Throw
+        { Assert-CanaryStorePreserved $original @{ head = 'head-hash'; parent = 'parent-hash'; extra = 'extra' } } | Should -Throw
     }
 }

@@ -61,8 +61,13 @@ try {
         & git -c gc.auto=0 add .
         if ($LASTEXITCODE -ne 0) { throw 'Fixture Git staging failed.' }
         & git -c user.name=Canary -c user.email=canary@example.invalid -c commit.gpgsign=false `
-            -c gc.auto=0 commit --quiet -m fixture
+            -c gc.auto=0 commit --quiet -m 'fixture start'
         if ($LASTEXITCODE -ne 0) { throw 'Fixture Git commit failed.' }
+        # Both commits retain the same working synthetic benchmark. Collection
+        # records the tip; backfill must fill the older point on this same runner.
+        & git -c user.name=Canary -c user.email=canary@example.invalid -c commit.gpgsign=false `
+            -c gc.auto=0 commit --quiet --allow-empty -m 'fixture tip'
+        if ($LASTEXITCODE -ne 0) { throw 'Fixture tip commit failed.' }
     }
     finally { Pop-Location }
 }

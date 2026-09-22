@@ -1,0 +1,191 @@
+name: Reusable benchmark backfill
+
+on:
+  workflow_call:
+    inputs:
+      azure-client-id:
+        description: Managed identity client ID for the configured Azure store.
+        required: true
+        type: string
+      azure-tenant-id:
+        description: Tenant ID for the configured Azure identity.
+        required: true
+        type: string
+      from:
+        description: Explicit range start; requires to and no rolling-window inputs.
+        type: string
+        default: ''
+      to:
+        description: Explicit range end, or optional endpoint override for a rolling window.
+        type: string
+        default: ''
+      lookback:
+        description: Nonzero rolling duration; requires minimum-age and no from.
+        type: string
+        default: ''
+      minimum-age:
+        description: Minimum age for automatic endpoint selection; requires lookback.
+        type: string
+        default: ''
+      platforms:
+        description: Comma-separated collection runner labels.
+        type: string
+        default: ubuntu-latest,windows-latest
+      working-directory:
+        description: Project directory relative to the caller repository.
+        type: string
+        default: .
+      config:
+        description: Configuration path relative to the invocation project directory.
+        type: string
+        default: ''
+      exclude:
+        description: Comma-separated workspace packages excluded from collection.
+        type: string
+        default: ''
+      bench:
+        description: Comma-separated Cargo benchmark targets.
+        type: string
+        default: ''
+      best-of:
+        description: Measurement repetitions, retaining each metric's minimum.
+        type: number
+        default: 1
+      all-features:
+        description: Enable all Cargo features during collection.
+        type: boolean
+        default: true
+      no-default-features:
+        description: Disable default Cargo features during collection.
+        type: boolean
+        default: false
+      features:
+        description: Comma-separated Cargo features.
+        type: string
+        default: ''
+      rustflags:
+        description: Additional measurement rustc arguments, using Cargo RUSTFLAGS whitespace splitting.
+        type: string
+        default: ''
+      install-method:
+        description: Install every tool with binstall, install or path.
+        type: string
+        default: binstall
+      source-path:
+        description: Folo source directory relative to the invocation checkout, for path mode only.
+        type: string
+        default: ''
+      ignore-errors:
+        description: Continue past individual commit build or benchmark failures, not infrastructure errors.
+        type: boolean
+        default: false
+      best-effort:
+        description: Opt into ignoring a backfill matrix job failure or hosted-runner timeout.
+        type: boolean
+        default: false
+
+permissions: {}
+
+# Queue every invocation rather than superseding repeated ranges or events.
+# Canonical project/platform queues below also serialize aliased config paths.
+# Ref: ../../docs/implementation.md#reusable-workflow-orchestration.
+concurrency:
+  group: cbh-backfill-run-${{ github.repository }}-${{ inputs.working-directory }}-${{ inputs.config }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  prepare:
+    # Work selection matches history; GitHub's fork permission cap is the
+    # authorization boundary, not this editable predicate.
+    if: >-
+      github.event_name != 'pull_request_target'
+      && (!github.event.pull_request
+          || (github.event.pull_request.head.repo.full_name == github.repository
+              && github.event.action != 'closed'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      instance: ${{ steps.prepare.outputs.instance }}
+      matrix: ${{ steps.prepare.outputs.matrix }}
+      expected-platforms: ${{ steps.prepare.outputs.expected-platforms }}
+      from: ${{ steps.prepare.outputs.from }}
+      to: ${{ steps.prepare.outputs.to }}
+      skipped: ${{ steps.prepare.outputs.skipped }}
+      has-work: ${{ steps.prepare.outputs.has-work }}
+    steps:
+      - name: Prepare implementation and caller context
+        id: context
+        uses: $/.github/actions/workflow-tools
+        with:
+          head: ${{ github.event.pull_request.head.sha || github.sha }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+      - name: Freeze backfill range and platform matrix
+        id: prepare
+        shell: pwsh
+        env:
+          CBH_SCRIPTS: ${{ steps.context.outputs.scripts-path }}
+          CBH_WORKFLOW_STATE: ${{ steps.context.outputs.state-path }}
+          CBH_FLOW: backfill
+          CBH_PLATFORMS: ${{ inputs.platforms }}
+          CBH_EXCLUDE: ${{ inputs.exclude }}
+          CBH_FROM: ${{ inputs.from }}
+          CBH_TO: ${{ inputs.to }}
+          CBH_LOOKBACK: ${{ inputs.lookback }}
+          CBH_MINIMUM_AGE: ${{ inputs.minimum-age }}
+        run: '& (Join-Path $env:CBH_SCRIPTS Run-Workflow.ps1) -Stage prepare'
+
+  backfill:
+    needs: prepare
+    if: needs.prepare.outputs.skipped == 'false' && needs.prepare.outputs.has-work == 'true'
+    runs-on: ${{ matrix.platform }}
+    # Match history's hosted-runner ceiling; best-effort is an explicit caller policy.
+    timeout-minutes: 360
+    continue-on-error: ${{ inputs.best-effort }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    concurrency:
+      group: cbh-backfill-work-${{ github.repository }}-${{ needs.prepare.outputs.instance }}-${{ matrix.platform }}
+      cancel-in-progress: false
+      queue: max
+    env:
+      AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+      AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+    steps:
+      - id: context
+        uses: $/.github/actions/workflow-tools
+        with:
+          # Fetch the frozen range tip, even when the original branch has moved.
+          head: ${{ needs.prepare.outputs.to }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+          benchmark-setup: 'true'
+      - name: Backfill historical workspace benchmarks
+        uses: $/
+        with:
+          command: backfill
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ steps.context.outputs.source-path }}
+          working-directory: ${{ steps.context.outputs.working-directory }}
+          config: ${{ steps.context.outputs.config }}
+          from: ${{ needs.prepare.outputs.from }}
+          to: ${{ needs.prepare.outputs.to }}
+          exclude: ${{ inputs.exclude }}
+          bench: ${{ inputs.bench }}
+          best-of: ${{ inputs.best-of }}
+          all-features: ${{ inputs.all-features }}
+          no-default-features: ${{ inputs.no-default-features }}
+          features: ${{ inputs.features }}
+          rustflags: ${{ inputs.rustflags }}
+          ignore-errors: ${{ inputs.ignore-errors }}
+          on-existing: skip

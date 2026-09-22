@@ -50,6 +50,12 @@ switch ($Stage) {
         $parameters.Flow = $env:CBH_FLOW
         $parameters.Platforms = $env:CBH_PLATFORMS
         $parameters.Exclude = $env:CBH_EXCLUDE
+        if ($parameters.Flow -eq 'backfill') {
+            $parameters.From = $env:CBH_FROM
+            $parameters.To = $env:CBH_TO
+            $parameters.Lookback = $env:CBH_LOOKBACK
+            $parameters.MinimumAge = $env:CBH_MINIMUM_AGE
+        }
     }
     'receipt' {
         $parameters.Instance = $env:CBH_INSTANCE
