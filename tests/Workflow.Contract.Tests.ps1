@@ -14,12 +14,14 @@ BeforeAll {
     $script:manifest = Read-ActionManifest (Join-Path $root 'release.json')
 
     function Test-SelectionCondition {
-        param([string] $Condition, [bool] $Skipped, [bool] $SkipAll, [bool] $Publish)
+        param([string] $Condition, [bool] $Skipped, [bool] $SkipAll, [bool] $Publish,
+            [string] $HasWork = 'true')
         # These selection gates use only string equality and boolean conjunction.
         # Evaluate their actual YAML expressions over the producer's wire values;
         # this does not emulate the rest of GitHub's expression language.
         $expression = $Condition.Replace('needs.prepare.outputs.skipped', "'$($Skipped.ToString().ToLowerInvariant())'")
         $expression = $expression.Replace('needs.prepare.outputs.skip-all', "'$($SkipAll.ToString().ToLowerInvariant())'")
+        $expression = $expression.Replace('needs.prepare.outputs.has-work', "'$HasWork'")
         $expression = $expression.Replace('inputs.publish', "`$$($Publish.ToString().ToLowerInvariant())")
         $expression = $expression.Replace('&&', ' -and ').Replace('!=', ' -ne ').Replace('==', ' -eq ')
         if ($expression -match 'needs\.|inputs\.|\|\||\$\{\{') { throw 'Unsupported selection expression.' }
@@ -146,6 +148,33 @@ Describe 'Reusable <flow> workflow contracts' -ForEach @(
         }
     }
 
+    It 'forwards compiler flags only to measurement root actions without changing job environments' {
+        $flags = "-Cllvm-args=-align-all-functions=6`t--cfg='literal; `$value'"
+        $workflow.on.workflow_call.inputs.rustflags.type | Should -BeExactly 'string'
+        $workflow.on.workflow_call.inputs.rustflags.default | Should -BeExactly $rootAction.inputs.rustflags.default
+        $rootAction.inputs.rustflags.default | Should -BeExactly ''
+        foreach ($job in $workflow.jobs.Values) {
+            foreach ($step in $job.steps) {
+                if ($step['uses'] -ceq '$/' -and $step.with.command -cin @('collect', 'backfill')) {
+                    Expand-ContractValue $step.with.rustflags @{ inputs = @{ rustflags = $flags } } |
+                        Should -BeExactly $flags
+                }
+                elseif ($step['with']) { $step.with.ContainsKey('rustflags') | Should -BeFalse }
+                if ($step['env']) {
+                    foreach ($value in $step.env.Values) {
+                        # Only direct runtime inputs carry these flags, not preparation
+                        # or installer environment assignments.
+                        @([regex]::Matches([string] $value, 'inputs\.rustflags')).Count | Should -Be 0
+                    }
+                }
+            }
+            if ($job['env']) {
+                $job.env.ContainsKey('RUSTFLAGS') | Should -BeFalse
+                $job.env.ContainsKey('CARGO_ENCODED_RUSTFLAGS') | Should -BeFalse
+            }
+        }
+    }
+
     It 'queues serialized jobs without replacing an older pending invocation' {
         foreach ($job in $workflow.jobs.Values) {
             if ($job['concurrency'] -and -not $job.concurrency['cancel-in-progress']) {
@@ -223,11 +252,53 @@ Describe 'Historical backfill graph behavior' {
             }
         }
         $backfill.on.workflow_call.inputs.Keys | Sort-Object |
-            Should -Be (@($common + @('from', 'to', 'ignore-errors', 'best-effort')) | Sort-Object)
-        foreach ($key in @('from', 'to')) {
-            $backfill.on.workflow_call.inputs[$key].required | Should -BeTrue
+            Should -Be (@($common + @('from', 'to', 'lookback', 'minimum-age', 'ignore-errors', 'best-effort')) | Sort-Object)
+        foreach ($key in @('from', 'to', 'lookback', 'minimum-age')) {
+            [bool] $backfill.on.workflow_call.inputs[$key]['required'] | Should -BeFalse
             $backfill.on.workflow_call.inputs[$key].type | Should -BeExactly 'string'
+            $backfill.on.workflow_call.inputs[$key].default | Should -BeExactly ''
         }
+    }
+
+    It 'hands scheduling choices to preparation but gives execution only a frozen range' -ForEach @(
+        @{ from = 'main~2'; to = 'main'; lookback = ''; age = '' }
+        @{ from = ''; to = ''; lookback = '14 days ago'; age = 'PT24H' }
+        @{ from = ''; to = 'release'; lookback = 'P14D'; age = '0 seconds' }
+    ) {
+        $inputs = @{ from = $from; to = $to; lookback = $lookback; 'minimum-age' = $age }
+        $preparation = @($prepare.steps | Where-Object { $_['id'] -ceq 'prepare' })[0]
+        $preparation.env.CBH_FLOW | Should -BeExactly 'backfill'
+        foreach ($binding in @(
+                @{ environment = 'CBH_FROM'; input = 'from' }
+                @{ environment = 'CBH_TO'; input = 'to' }
+                @{ environment = 'CBH_LOOKBACK'; input = 'lookback' }
+                @{ environment = 'CBH_MINIMUM_AGE'; input = 'minimum-age' }
+            )) {
+            Expand-ContractValue $preparation.env[$binding.environment] @{ inputs = $inputs } |
+                Should -BeExactly $inputs[$binding.input]
+        }
+        $command = @($work.steps | Where-Object { $_['uses'] -ceq '$/' })[0]
+        foreach ($key in @('lookback', 'minimum-age')) {
+            $command.with.ContainsKey($key) | Should -BeFalse
+            $rootAction.inputs.ContainsKey($key) | Should -BeFalse
+        }
+        $frozen = @{ from = 'a' * 40; to = 'b' * 40 }
+        foreach ($key in @('from', 'to')) {
+            Expand-ContractValue $command.with[$key] @{
+                inputs = $inputs; needs = @{ prepare = @{ outputs = $frozen } }
+            } | Should -BeExactly $frozen[$key]
+        }
+    }
+
+    It 'starts no matrix for no-work, fork skips or absent work-selection output' {
+        foreach ($skipped in @($false, $true)) {
+            foreach ($hasWork in @('true', 'false', '', 'invalid')) {
+                Test-SelectionCondition $work.if $skipped $false $false -HasWork $hasWork |
+                    Should -Be (-not $skipped -and $hasWork -ceq 'true')
+            }
+        }
+        $missingSkip = $work.if.Replace('needs.prepare.outputs.skipped', "''")
+        Test-SelectionCondition $missingSkip $false $false $false -HasWork true | Should -BeFalse
     }
 
     It 'selects the real calling head and rejects fork, target and closed PR work' -ForEach @(
@@ -349,7 +420,7 @@ Describe 'Historical backfill graph behavior' {
         $commands[0].with.ContainsKey('best-effort') | Should -BeFalse
         $commands[0].with.ContainsKey('context') | Should -BeFalse
         $prepare.outputs.Keys | Sort-Object |
-            Should -Be @('expected-platforms', 'from', 'instance', 'matrix', 'skipped', 'to')
+            Should -Be @('expected-platforms', 'from', 'has-work', 'instance', 'matrix', 'skipped', 'to')
     }
 }
 

@@ -35,6 +35,14 @@ The output file is the current step's `GITHUB_OUTPUT`. The temporary root is out
 the measured checkout. Publication uses the normal ambient GitHub repository/run
 context where an explicit execution-data input is absent.
 
+`rustflags` remains an opaque runtime string in this handoff. Workflows forward it
+only to root `collect` and `backfill` invocations, not to preparation, setup,
+installation, analysis or publication. PowerShell leaves both ambient flag
+variables and the input unchanged. The companion owns whitespace splitting,
+effective ambient flag selection and child-only `CARGO_ENCODED_RUSTFLAGS`
+composition, including the collection machine-key query. No workflow or script
+calculates or replaces compiler options.
+
 ### Installation identity and cache ownership
 
 The installer returns a map from package names to absolute executable paths below
@@ -130,13 +138,22 @@ use the canonical project identity from preparation. This avoids a nested workfl
 layer solely to obtain a preparation-dependent workflow-level concurrency group.
 
 Backfill preparation sends only `working-directory`, `config`, `platforms`,
-`exclude`, `from` and `to` to `prepare-workflow --flow backfill`. Rust resolves
-the refs option-safely; it does not inspect current-HEAD Cargo metadata or select
-packages. Successful output is `instance`, `matrix`, `expected-platforms`,
-`from`, `to` and `skipped=false`. Policy skips retain the common matrix outputs
-with `skipped=true` and `skip-reason`, without range endpoints. The adapter rejects
-missing, unexpected or contradictory backfill outputs, and requires full commit
-SHAs on success. It does not accept the history/PR scope handoff for backfill.
+`exclude`, `from`, `to`, `lookback` and `minimum-age` to
+`prepare-workflow --flow backfill`. Empty values remain data for Rust to validate
+and interpret; PowerShell does not choose a mode, parse durations, read the clock
+or select historical commits. Rust validates explicit versus rolling inputs,
+resolves refs option-safely and calculates a rolling window from one injected
+clock snapshot. It does not inspect current-HEAD Cargo metadata or select packages.
+
+Backfill always emits `instance`, `matrix`, `expected-platforms`, `skipped` and
+`has-work`. A normal range has `skipped=false`, `has-work=true` and full-SHA `from`
+and `to`. No eligible automatic endpoint has `skipped=false`, `has-work=false`
+and `no-work-reason=no-eligible-commit`, without endpoints. A policy skip has
+`skipped=true`, `has-work=false` and `skip-reason`, without endpoints.
+The adapter rejects missing, malformed, unexpected or contradictory handoffs,
+including mixed reasons and ranges. Only non-skipped preparation with explicit
+work enables the execution matrix. History/PR preparation input and output shapes
+are unchanged.
 
 Backfill preparation checks out the real event head through `workflow-tools`.
 Only the backfill preparation operation exposes fetched `origin` branches as
@@ -155,7 +172,8 @@ Each matrix job then passes the prepared `to` SHA as that adapter's measurement
 head, fetching full history even if the original remote branch has moved.
 Invocation configuration, setup and source installation use the adapter unchanged.
 The root `backfill` command receives only the frozen range and common collection
-options, with `on-existing: skip`. First-parent validity and traversal stay in the
+options, with `on-existing: skip`; rolling inputs never reach the explicit-range
+executor. First-parent validity and traversal stay in the
 main executable. The graph has no receipt, analysis, artifact or sink jobs.
 
 Backfill's `cbh-backfill-run` workflow queue groups repository/configuration
@@ -219,6 +237,11 @@ with `prepare-workflow --flow backfill`. Its frozen outputs must match the actua
 fixture commits without a scope skip. The checkout is detached with fetched
 `origin/main` but no local `main`; the real preparation boundary must resolve
 `main~1`, `main` and `refs/heads/main` while preserving HEAD and existing refs.
+The same adapter then exercises rolling selection, a rolling endpoint override
+and no eligible endpoint. Every request retains the real workflow's empty optional
+defaults so validation cannot mistake them for conflicting selections. Fixed
+historical Git dates keep this native smoke far from live-clock cutoff boundaries;
+injected-clock Rust tests own exact duration and calendar behavior.
 GitHub event environment is cleared only in
 the fixture's child processes: the action repository's event SHA is not a fixture
 commit. This contract probe neither installs tools nor substitutes for registry

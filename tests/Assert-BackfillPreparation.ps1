@@ -2,8 +2,9 @@
 <#
 The published installation gate calls this offline contract canary with its already
 verified companion. It also accepts a locally built companion for source validation.
-An isolated Git history loses its Cargo workspace at the invocation head: backfill
-must still freeze the historical range without current-HEAD benchmark detection.
+An isolated Git history loses its Cargo workspace at the invocation head: exact
+and rolling preparation must still work without current-HEAD benchmark detection.
+All cases pass the adapter's real input shape, including empty optional defaults.
 Only child processes discard GitHub event context, which belongs to the action
 repository rather than this fixture. No tools are installed and no APIs are called.
 #>
@@ -60,10 +61,15 @@ function Invoke-PreparationCanaryProcess {
 
 function Invoke-PreparationCanaryGit {
     param([string[]] $Arguments)
+    # Fixed historical dates keep this real-clock smoke far from cutoff boundaries.
+    # Exact duration/calendar behavior belongs to the injected-clock Rust tests.
     Invoke-PreparationCanaryProcess -FilePath git -Arguments (@(
             '-c', 'user.name=Canary', '-c', 'user.email=canary@example.invalid',
             '-c', 'commit.gpgsign=false', '-c', 'gc.auto=0', '-c', 'core.autocrlf=false'
-        ) + $Arguments)
+        ) + $Arguments) -Environment @{
+        GIT_AUTHOR_DATE = '2000-01-01T00:00:00Z'
+        GIT_COMMITTER_DATE = '2000-01-01T00:00:00Z'
+    }
 }
 
 $null = Invoke-PreparationCanaryGit @('init', '--quiet', '-b', 'main')
@@ -92,8 +98,32 @@ $statePath = Join-Path $Root 'state.json'
 } | ConvertTo-Json | Set-Content -LiteralPath $statePath
 $entry = Join-Path $PSScriptRoot '..\scripts\Run-Workflow.ps1'
 $pwsh = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
-foreach ($tip in @('main', 'refs/heads/main')) {
-    $outputPath = Join-Path $Root "preparation-output-$([guid]::NewGuid().ToString('N'))"
+# A narrow window exercises the single-commit fallback. An age cutoff predating
+# the fixture exercises no-work, while an explicit endpoint bypasses that cutoff.
+$cases = @(
+    @{
+        name = 'exact-short'; from = 'main~1'; to = 'main'; lookback = ''; age = ''
+        hasWork = 'true'; expectedFrom = $from; expectedTo = $to
+    }
+    @{
+        name = 'exact-qualified'; from = 'main~1'; to = 'refs/heads/main'; lookback = ''; age = ''
+        hasWork = 'true'; expectedFrom = $from; expectedTo = $to
+    }
+    @{
+        name = 'rolling'; from = ''; to = ''; lookback = '1 nanosecond'; age = '0 seconds'
+        hasWork = 'true'; expectedFrom = $to; expectedTo = $to
+    }
+    @{
+        name = 'rolling-override'; from = ''; to = 'release'; lookback = '1 nanosecond'; age = '100 years'
+        hasWork = 'true'; expectedFrom = $from; expectedTo = $from
+    }
+    @{
+        name = 'no-work'; from = ''; to = ''; lookback = '14 days'; age = '100 years'
+        hasWork = 'false'
+    }
+)
+$results = @(foreach ($case in $cases) {
+    $outputPath = Join-Path $Root "preparation-output-$($case.name)"
     $null = Invoke-PreparationCanaryProcess -FilePath $pwsh `
         -Arguments @('-NoProfile', '-File', $entry, '-Stage', 'prepare', '-StatePath', $statePath) `
         -Environment @{
@@ -101,8 +131,10 @@ foreach ($tip in @('main', 'refs/heads/main')) {
             CBH_FLOW = 'backfill'
             CBH_PLATFORMS = 'ubuntu-latest,windows-latest'
             CBH_EXCLUDE = ''
-            CBH_FROM = 'main~1'
-            CBH_TO = $tip
+            CBH_FROM = $case.from
+            CBH_TO = $case.to
+            CBH_LOOKBACK = $case.lookback
+            CBH_MINIMUM_AGE = $case.age
         }
 
     # Run-Workflow validates the strict output shape; compare its frozen endpoints
@@ -112,10 +144,22 @@ foreach ($tip in @('main', 'refs/heads/main')) {
         $key, $value = $line -split '=', 2
         $outputs[$key] = $value
     }
-    if ($outputs['skipped'] -cne 'false' -or $outputs['from'] -cne $from -or $outputs['to'] -cne $to) {
-        throw 'Backfill preparation did not preserve the historical fixture range.'
+    if ($outputs['skipped'] -cne 'false' -or $outputs['has-work'] -cne $case.hasWork) {
+        throw "Backfill preparation selected unexpected work for $($case.name)."
     }
-}
+    if ($case.hasWork -ceq 'true') {
+        if ($outputs['from'] -cne $case.expectedFrom -or $outputs['to'] -cne $case.expectedTo) {
+            throw "Backfill preparation selected unexpected endpoints for $($case.name)."
+        }
+    }
+    elseif ($outputs['no-work-reason'] -cne 'no-eligible-commit' -or
+        $outputs.ContainsKey('from') -or $outputs.ContainsKey('to')) {
+        throw 'No eligible endpoint must produce an explicit no-work handoff without a range.'
+    }
+    Copy-Item -LiteralPath (Join-Path $Root 'preparation.json') `
+        -Destination (Join-Path $Root "preparation-input-$($case.name).json")
+    @{ case = $case.name; outputs = $outputs }
+})
 if ((Invoke-PreparationCanaryGit @('rev-parse', 'HEAD')) -cne $to -or
     (Invoke-PreparationCanaryGit @('rev-parse', '--abbrev-ref', 'HEAD')) -cne 'HEAD' -or
     (Invoke-PreparationCanaryGit @('rev-parse', 'preserved')) -cne $from -or
@@ -123,4 +167,5 @@ if ((Invoke-PreparationCanaryGit @('rev-parse', 'HEAD')) -cne $to -or
     (Invoke-PreparationCanaryGit @('for-each-ref', '--format=%(refname)', 'refs/heads/HEAD'))) {
     throw 'Branch alias preparation changed frozen HEAD or existing ref resolution.'
 }
-Write-Information "Backfill preparation froze named refs to $from..$to in a detached checkout without a current-HEAD Cargo workspace." -InformationAction Continue
+$results | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Root 'preparation-results.json')
+Write-Information 'Verified exact, rolling, override and no-work preparation through the real workflow adapter with empty defaults.' -InformationAction Continue

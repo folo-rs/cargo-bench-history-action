@@ -19,18 +19,19 @@ Describe 'Workflow adapter' {
             }
 
             function Write-PreparationFixture {
-                param([string] $Path, [string] $Flow = 'history', [string] $Packages = 'crate')
+                param([string] $Path, [string] $Flow = 'history', [string] $Packages = 'crate',
+                    [ValidateSet('work', 'no-work', 'skipped')] [string] $BackfillState = 'work')
                 $lines = @(
                     'instance=project'
                     'matrix={"platform":["linux","windows"]}'
                     'expected-platforms=linux,windows'
                 )
                 if ($Flow -eq 'backfill') {
-                    $lines += @(
-                        "from=$('a' * 40)"
-                        "to=$('b' * 40)"
-                        'skipped=false'
-                    )
+                    $lines += switch ($BackfillState) {
+                        'work' { @("from=$('a' * 40)", "to=$('b' * 40)", 'skipped=false', 'has-work=true') }
+                        'no-work' { @('skipped=false', 'has-work=false', 'no-work-reason=no-eligible-commit') }
+                        'skipped' { @('skipped=true', 'has-work=false', 'skip-reason=fork-pull-request') }
+                    }
                     Set-Content -LiteralPath $Path -Value $lines
                     return
                 }
@@ -232,9 +233,11 @@ Describe 'Workflow adapter' {
                 Invoke-WorkflowOperation prepare $script:operationContext -Flow backfill -Platforms linux `
                     -From $from -To $to -Exclude excluded -OutputPath $script:operationOutput
                 $inputs = Get-Content (Join-Path $script:operationContext['run-root'] 'preparation.json') -Raw | ConvertFrom-Json -AsHashtable
-                $inputs.Keys | Sort-Object | Should -Be @('config', 'exclude', 'from', 'platforms', 'to', 'working-directory')
+                $inputs.Keys | Sort-Object | Should -Be @('config', 'exclude', 'from', 'lookback', 'minimum-age', 'platforms', 'to', 'working-directory')
                 $inputs.from | Should -BeExactly $from
                 $inputs.to | Should -BeExactly $to
+                $inputs.lookback | Should -BeExactly ''
+                $inputs['minimum-age'] | Should -BeExactly ''
                 $inputs.exclude | Should -BeExactly 'excluded'
                 $inputs['working-directory'] | Should -BeExactly $script:operationContext['working-directory']
                 $inputs.config | Should -BeExactly $script:operationContext['config']
@@ -242,6 +245,26 @@ Describe 'Workflow adapter' {
                     $Arguments[0] -ceq 'prepare-workflow' -and $Arguments[1] -ceq '--flow' -and
                     $Arguments[2] -ceq 'backfill' -and $Arguments.Count -eq 7
                 }
+            }
+
+            It 'forwards scheduling strings verbatim without parsing or choosing a mode' -ForEach @(
+                @{ from = ''; to = ''; lookback = '14 days ago'; age = '24 hours' }
+                @{ from = ''; to = 'refs/heads/main'; lookback = 'P14D'; age = 'PT0S' }
+                @{ from = 'main~2'; to = 'main'; lookback = ''; age = '' }
+                @{ from = 'main~2'; to = ''; lookback = 'not a duration; $literal'; age = "invalid`nvalue" }
+            ) {
+                Mock Invoke-WorkflowProcess {
+                    param($Arguments)
+                    Write-PreparationFixture -Path $Arguments[-1] -Flow backfill
+                } -ParameterFilter { $FilePath -ceq 'fixture-companion' }
+                Invoke-WorkflowOperation prepare $script:operationContext -Flow backfill `
+                    -From $from -To $to -Lookback $lookback -MinimumAge $age -OutputPath $script:operationOutput
+                $inputs = Get-Content (Join-Path $script:operationContext['run-root'] 'preparation.json') -Raw | ConvertFrom-Json -AsHashtable
+                $inputs.from | Should -BeExactly $from
+                $inputs.to | Should -BeExactly $to
+                $inputs.lookback | Should -BeExactly $lookback
+                $inputs['minimum-age'] | Should -BeExactly $age
+                $inputs.Keys | Sort-Object | Should -Be @('config', 'exclude', 'from', 'lookback', 'minimum-age', 'platforms', 'to', 'working-directory')
             }
 
             It 'does not add range inputs to <flow> preparation' -ForEach @(
@@ -252,6 +275,7 @@ Describe 'Workflow adapter' {
                     Write-PreparationFixture -Path $Arguments[-1] -Flow $Arguments[2]
                 }
                 Invoke-WorkflowOperation prepare $script:operationContext -Flow $flow -From old -To new `
+                    -Lookback '14 days' -MinimumAge '24 hours' `
                     -OutputPath $script:operationOutput
                 $inputs = Get-Content (Join-Path $script:operationContext['run-root'] 'preparation.json') -Raw | ConvertFrom-Json -AsHashtable
                 $inputs.Keys | Sort-Object | Should -Be @('config', 'exclude', 'platforms', 'working-directory')
@@ -295,26 +319,32 @@ Describe 'Workflow adapter' {
                 { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow history } | Should -Throw
             }
 
-            It 'rejects missing or empty backfill success output <key>' -ForEach @(
-                @{ key = 'instance' }, @{ key = 'matrix' }, @{ key = 'expected-platforms' }
-                @{ key = 'from' }, @{ key = 'to' }, @{ key = 'skipped' }
+            It 'accepts only complete <state> backfill handoffs and rejects every missing or blank field' -ForEach @(
+                @{ state = 'work' }, @{ state = 'no-work' }, @{ state = 'skipped' }
             ) {
-                Write-PreparationFixture -Path $script:operationOutput -Flow backfill
-                $remaining = @(Get-Content $script:operationOutput | Where-Object { -not $_.StartsWith("$key=") })
-                Set-Content $script:operationOutput $remaining
-                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
-                Add-Content $script:operationOutput "$key="
-                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+                Write-PreparationFixture -Path $script:operationOutput -Flow backfill -BackfillState $state
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Not -Throw
+                $complete = @(Get-Content $script:operationOutput)
+                foreach ($line in $complete) {
+                    $key = ($line -split '=', 2)[0]
+                    $remaining = @($complete | Where-Object { -not $_.StartsWith("$key=") })
+                    Set-Content $script:operationOutput $remaining
+                    { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+                    Add-Content $script:operationOutput "$key="
+                    { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+                }
             }
 
             It 'rejects invalid frozen ranges and unexpected scope or report outputs' -ForEach @(
                 @{ key = 'from'; value = 'HEAD~1' }, @{ key = 'to'; value = 'main' }
                 @{ key = 'from'; value = 'abc123' }, @{ key = 'to'; value = 'g' * 40 }
                 @{ key = 'skipped'; value = 'False' }, @{ key = 'skipped'; value = 'maybe' }
+                @{ key = 'has-work'; value = 'True' }, @{ key = 'has-work'; value = '1' }
                 @{ key = 'head'; value = 'a' * 40 }, @{ key = 'base'; value = 'a' * 40 }
                 @{ key = 'packages'; value = '' }, @{ key = 'skip-all'; value = 'false' }
                 @{ key = 'collection-job-prefix'; value = 'prefix' }, @{ key = 'outcome'; value = 'success' }
                 @{ key = 'skip-reason'; value = 'fork-pull-request' }
+                @{ key = 'no-work-reason'; value = 'no-eligible-commit' }
             ) {
                 Write-PreparationFixture -Path $script:operationOutput -Flow backfill
                 @(Get-Content $script:operationOutput | Where-Object { -not $_.StartsWith("$key=") }) |
@@ -323,15 +353,47 @@ Describe 'Workflow adapter' {
                 { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
             }
 
-            It 'accepts a reasoned backfill policy skip only without range or scope claims' {
+            It 'rejects mixed work, no-work and policy-skip outputs' -ForEach @(
+                @{ state = 'work'; key = 'skipped'; value = 'true' }
+                @{ state = 'work'; key = 'has-work'; value = 'false' }
+                @{ state = 'no-work'; key = 'from'; value = 'a' * 40 }
+                @{ state = 'no-work'; key = 'to'; value = 'b' * 40 }
+                @{ state = 'no-work'; key = 'skip-reason'; value = 'fork-pull-request' }
+                @{ state = 'no-work'; key = 'has-work'; value = 'true' }
+                @{ state = 'no-work'; key = 'skipped'; value = 'true' }
+                @{ state = 'no-work'; key = 'no-work-reason'; value = 'unknown-reason' }
+                @{ state = 'skipped'; key = 'from'; value = 'a' * 40 }
+                @{ state = 'skipped'; key = 'to'; value = 'b' * 40 }
+                @{ state = 'skipped'; key = 'no-work-reason'; value = 'no-eligible-commit' }
+                @{ state = 'skipped'; key = 'has-work'; value = 'true' }
+                @{ state = 'skipped'; key = 'skipped'; value = 'false' }
+            ) {
+                Write-PreparationFixture -Path $script:operationOutput -Flow backfill -BackfillState $state
+                @(Get-Content $script:operationOutput | Where-Object { -not $_.StartsWith("$key=") }) |
+                    Set-Content $script:operationOutput
+                Add-Content $script:operationOutput "$key=$value"
+                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+            }
+
+            It 'rejects malformed or duplicate backfill output records' -ForEach @(
+                @{ extra = 'has-work=true' }, @{ extra = 'has-work=false' }
+                @{ extra = 'HAS-WORK=true' }, @{ extra = 'matrix<<EOF' }
+                @{ extra = 'not an output record' }
+            ) {
                 Write-PreparationFixture -Path $script:operationOutput -Flow backfill
-                @(Get-Content $script:operationOutput | Where-Object { $_ -notmatch '^(from|to)=' }) `
-                    -replace '^skipped=false$', 'skipped=true' | Set-Content $script:operationOutput
+                Add-Content $script:operationOutput $extra
                 { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
-                Add-Content $script:operationOutput 'skip-reason=fork-pull-request'
-                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Not -Throw
-                Add-Content $script:operationOutput "to=$('b' * 40)"
-                { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
+            }
+
+            It 'propagates native scheduling validation errors and missing output instead of skipping work' -ForEach @(
+                @{ failure = 'process' }, @{ failure = 'absent-output' }
+            ) {
+                $script:preparationFailure = $failure
+                Mock Invoke-WorkflowProcess {
+                    if ($script:preparationFailure -eq 'process') { throw 'Invalid scheduling inputs.' }
+                } -ParameterFilter { $FilePath -ceq 'fixture-companion' }
+                { Invoke-WorkflowOperation prepare $script:operationContext -Flow backfill `
+                        -Lookback invalid -OutputPath $script:operationOutput } | Should -Throw
             }
 
             It 'does not accept the history scope handoff as backfill preparation' {

@@ -12,13 +12,21 @@ on:
         required: true
         type: string
       from:
-        description: Start of the first-parent backfill range, resolved during preparation.
-        required: true
+        description: Explicit range start; requires to and no rolling-window inputs.
         type: string
+        default: ''
       to:
-        description: End of the first-parent backfill range, resolved during preparation.
-        required: true
+        description: Explicit range end, or optional endpoint override for a rolling window.
         type: string
+        default: ''
+      lookback:
+        description: Nonzero rolling duration; requires minimum-age and no from.
+        type: string
+        default: ''
+      minimum-age:
+        description: Minimum age for automatic endpoint selection; requires lookback.
+        type: string
+        default: ''
       platforms:
         description: Comma-separated collection runner labels.
         type: string
@@ -53,6 +61,10 @@ on:
         default: false
       features:
         description: Comma-separated Cargo features.
+        type: string
+        default: ''
+      rustflags:
+        description: Additional measurement rustc arguments, using Cargo RUSTFLAGS whitespace splitting.
         type: string
         default: ''
       install-method:
@@ -101,6 +113,7 @@ jobs:
       from: ${{ steps.prepare.outputs.from }}
       to: ${{ steps.prepare.outputs.to }}
       skipped: ${{ steps.prepare.outputs.skipped }}
+      has-work: ${{ steps.prepare.outputs.has-work }}
     steps:
       - name: Prepare implementation and caller context
         id: context
@@ -122,11 +135,13 @@ jobs:
           CBH_EXCLUDE: ${{ inputs.exclude }}
           CBH_FROM: ${{ inputs.from }}
           CBH_TO: ${{ inputs.to }}
+          CBH_LOOKBACK: ${{ inputs.lookback }}
+          CBH_MINIMUM_AGE: ${{ inputs.minimum-age }}
         run: '& (Join-Path $env:CBH_SCRIPTS Run-Workflow.ps1) -Stage prepare'
 
   backfill:
     needs: prepare
-    if: needs.prepare.outputs.skipped == 'false'
+    if: needs.prepare.outputs.skipped == 'false' && needs.prepare.outputs.has-work == 'true'
     runs-on: ${{ matrix.platform }}
     # Match history's hosted-runner ceiling; best-effort is an explicit caller policy.
     timeout-minutes: 360
@@ -171,5 +186,6 @@ jobs:
           all-features: ${{ inputs.all-features }}
           no-default-features: ${{ inputs.no-default-features }}
           features: ${{ inputs.features }}
+          rustflags: ${{ inputs.rustflags }}
           ignore-errors: ${{ inputs.ignore-errors }}
           on-existing: skip

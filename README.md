@@ -82,8 +82,9 @@ including when surviving platforms produce a useful qualified report.
 
 ### Workflow configuration
 
-All reusable workflows require the Azure identifiers as strings. Backfill also
-requires `from` and `to`. Optional inputs are:
+All reusable workflows require the Azure identifiers as strings. Backfill requires
+either `from` and `to` together, or `lookback` and `minimum-age` together with an
+optional `to` override. Inputs are:
 
 | Input | Default | Purpose |
 | --- | --- | --- |
@@ -96,10 +97,15 @@ requires `from` and `to`. Optional inputs are:
 | `all-features` | `true` | Enable all Cargo features. |
 | `no-default-features` | `false` | Disable default Cargo features. |
 | `features` | Empty | Additional CSV Cargo features. |
+| `rustflags` | Empty | Additional rustc arguments for measurements; uses Cargo `RUSTFLAGS` whitespace splitting, not shell parsing. |
 | `install-method` | `binstall` | `binstall`, `install` or `path` for every required tool. |
 | `source-path` | Empty | Folo source directory relative to the invocation checkout, required only for `path`. |
 | `publish` | `true` | History/PR only: enable all GitHub lifecycle/report writes. Analysis and artifacts remain available when false. |
 | `since` | Main tool default | History-only look-back window. |
+| `from` | Empty | Backfill-only explicit range start; pair with `to`, without rolling inputs. |
+| `to` | Empty | Backfill-only explicit range end or rolling endpoint override. |
+| `lookback` | Empty | Backfill-only nonzero rolling duration; pair with `minimum-age`, without `from`. |
+| `minimum-age` | Empty | Backfill-only minimum age for an automatic endpoint; may be zero. |
 | `ignore-errors` | `false` | Backfill only: continue past individual commit build or benchmark failures; infrastructure errors remain failures. |
 | `best-effort` | `false` | Backfill only: opt into ignoring a matrix job failure or hosted-runner timeout. |
 
@@ -114,6 +120,13 @@ For extra benchmark prerequisites, provide the fixed repository-local action
 invocation checkout. There is no setup action path/ref override. Repositories
 needing a different job graph can use the root action below.
 
+`rustflags` applies only to collection and backfill, including the collection
+machine-key query, not tool installation or analysis. The companion appends its
+arguments to the effective ambient compiler flags, preferring
+`CARGO_ENCODED_RUSTFLAGS` when present over `RUSTFLAGS` and preserving existing
+encoded argument boundaries. The composed environment belongs only to child
+measurement processes; empty input leaves the environment unchanged.
+
 Source-mode Folo callers set `install-method: path` and `source-path: .`. Every tool
 comes from that invocation checkout, while PR measurements use a separate checkout
 of the frozen real head. The workflow and its internal actions stay on the same
@@ -121,9 +134,9 @@ selected action revision through GitHub's `$/` self-repository references.
 
 ### Backfill historical measurements
 
-Use the reusable backfill workflow for an explicit first-parent range. The caller
-chooses its trigger and range; the workflow resolves both endpoints to full commit
-SHAs before starting its platform matrix.
+Use the reusable backfill workflow for an explicit first-parent range or a rolling
+window. The caller supplies configuration; the workflow selects and freezes the
+range before starting its platform matrix. An explicit range caller is:
 
 ```yaml
 name: Backfill benchmark history
@@ -150,6 +163,42 @@ jobs:
       from: ${{ inputs.from }}
       to: ${{ inputs.to }}
 ```
+
+A rolling caller needs no preparation job, date arithmetic or Git commands:
+
+```yaml
+name: Backfill recent benchmark history
+on:
+  schedule:
+    - cron: 0 2 * * *
+  workflow_dispatch:
+    inputs:
+      to:
+        description: Optional endpoint override
+        type: string
+jobs:
+  backfill:
+    permissions:
+      contents: read
+      id-token: write
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v1
+    with:
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      lookback: 14 days
+      minimum-age: 24 hours
+      to: ${{ inputs.to }}
+```
+
+Rolling durations use Jiff's friendly or ISO span magnitudes, such as `14 days`,
+`14 days ago` or `P14D`, not absolute dates. The companion uses one current-time
+snapshot and UTC calendar arithmetic. Automatic selection chooses the first
+eligible commit on the invocation head's first-parent history at least
+`minimum-age` old. `from` is the oldest reachable first-parent commit within the
+lookback window relative to that same current time, or `to` if none is in the
+window. An optional `to` bypasses automatic endpoint age selection; it does not
+move the lookback window's time origin. If no automatic endpoint qualifies,
+preparation succeeds with no work and runs no matrix.
 
 Backfill measures the workspace in each historical checkout, applying `exclude`
 without requiring a package list or benchmarks at the invocation head. Each

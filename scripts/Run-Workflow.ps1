@@ -53,6 +53,8 @@ switch ($Stage) {
         if ($parameters.Flow -eq 'backfill') {
             $parameters.From = $env:CBH_FROM
             $parameters.To = $env:CBH_TO
+            $parameters.Lookback = $env:CBH_LOOKBACK
+            $parameters.MinimumAge = $env:CBH_MINIMUM_AGE
         }
     }
     'receipt' {

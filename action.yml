@@ -36,6 +36,9 @@ inputs:
     description: Disable default Cargo features (true or false).
   features:
     description: Comma-separated Cargo features.
+  rustflags:
+    description: Additional rustc arguments for collect/backfill, using Cargo RUSTFLAGS whitespace splitting.
+    default: ''
   machine-keys:
     description: Directory containing selected platform subdirectories with machine-key.txt files.
   cache:

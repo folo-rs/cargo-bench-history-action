@@ -162,6 +162,8 @@ function Invoke-WorkflowOperation {
         [string] $Exclude,
         [string] $From,
         [string] $To,
+        [string] $Lookback,
+        [string] $MinimumAge,
         [string] $Instance,
         [string] $Head,
         [string] $Platform,
@@ -184,6 +186,8 @@ function Invoke-WorkflowOperation {
                 Initialize-WorkflowBackfillBranch -WorkingDirectory $Context['working-directory']
                 $inputs['from'] = $From
                 $inputs['to'] = $To
+                $inputs['lookback'] = $Lookback
+                $inputs['minimum-age'] = $MinimumAge
             }
             $inputs | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $inputPath -Encoding utf8
             @('prepare-workflow', '--flow', $Flow, '--inputs-file', $inputPath,
@@ -227,13 +231,20 @@ function Assert-WorkflowPreparationOutput {
         }
     }
     if ($Flow -eq 'backfill') {
-        if (-not $outputs.ContainsKey('skipped') -or $outputs['skipped'] -cnotin @('true', 'false')) {
-            throw 'Backfill preparation did not emit an explicit work-selection output.'
-        }
-        $required = $commonKeys + @('skipped') + $(if ($outputs['skipped'] -ceq 'true') {
-                @('skip-reason')
+        foreach ($key in @('skipped', 'has-work')) {
+            if (-not $outputs.ContainsKey($key) -or $outputs[$key] -cnotin @('true', 'false')) {
+                throw "Backfill preparation did not emit explicit $key."
             }
-            else { @('from', 'to') })
+        }
+        $required = $commonKeys + @('skipped', 'has-work')
+        if ($outputs['skipped'] -ceq 'true') {
+            if ($outputs['has-work'] -cne 'false') {
+                throw 'Skipped backfill preparation cannot claim execution work.'
+            }
+            $required += 'skip-reason'
+        }
+        elseif ($outputs['has-work'] -ceq 'true') { $required += @('from', 'to') }
+        else { $required += 'no-work-reason' }
         foreach ($key in $required) {
             if (-not $outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($outputs[$key])) {
                 throw "Backfill preparation did not emit $key."
@@ -242,7 +253,11 @@ function Assert-WorkflowPreparationOutput {
         foreach ($key in $outputs.Keys) {
             if ($key -cnotin $required) { throw "Unexpected backfill preparation output: $key." }
         }
-        if ($outputs['skipped'] -ceq 'false') {
+        if ($outputs['skipped'] -ceq 'false' -and $outputs['has-work'] -ceq 'false' -and
+            $outputs['no-work-reason'] -cne 'no-eligible-commit') {
+            throw 'Unknown backfill no-work reason.'
+        }
+        if ($outputs['has-work'] -ceq 'true') {
             # Only check the frozen wire representation. Git resolution and the
             # first-parent range policy belong to the Rust tools.
             foreach ($key in @('from', 'to')) {

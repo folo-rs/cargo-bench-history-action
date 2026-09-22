@@ -49,7 +49,8 @@ Describe 'Workflow native handoff' {
         $script:environment = @{}
         foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_REPOSITORY', 'RUNNER_TEMP', 'GITHUB_OUTPUT',
                 'CBH_WORKFLOW_INPUTS', 'CBH_WORKFLOW_STATE', 'CBH_FLOW', 'CBH_PLATFORMS',
-                'CBH_EXCLUDE', 'CBH_FROM', 'CBH_TO', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')) {
+                'CBH_EXCLUDE', 'CBH_FROM', 'CBH_TO', 'CBH_LOOKBACK', 'CBH_MINIMUM_AGE',
+                'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')) {
             $script:environment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
         $env:GITHUB_WORKSPACE = $script:caller
@@ -101,6 +102,8 @@ Describe 'Workflow native handoff' {
         $env:CBH_EXCLUDE = 'excluded'
         $env:CBH_FROM = 'topic/from'
         $env:CBH_TO = 'topic/to'
+        $env:CBH_LOOKBACK = '14 days ago'
+        $env:CBH_MINIMUM_AGE = 'PT24H'
         $env:CBH_WORKFLOW_STATE = Join-Path $temporary 'state.json'
         '{"companion":"fixture"}' | Set-Content $env:CBH_WORKFLOW_STATE
         Mock Invoke-WorkflowOperation {}
@@ -108,8 +111,11 @@ Describe 'Workflow native handoff' {
         Should -Invoke Invoke-WorkflowOperation -Times 1 -Exactly -ParameterFilter {
             $Operation -ceq 'prepare' -and $Flow -ceq $env:CBH_FLOW -and
             $Platforms -ceq $env:CBH_PLATFORMS -and $Exclude -ceq $env:CBH_EXCLUDE -and
-            $(if ($Flow -eq 'backfill') { $From -ceq $env:CBH_FROM -and $To -ceq $env:CBH_TO }
-                else { -not $From -and -not $To })
+            $(if ($Flow -eq 'backfill') {
+                    $From -ceq $env:CBH_FROM -and $To -ceq $env:CBH_TO -and
+                    $Lookback -ceq $env:CBH_LOOKBACK -and $MinimumAge -ceq $env:CBH_MINIMUM_AGE
+                }
+                else { -not $From -and -not $To -and -not $Lookback -and -not $MinimumAge })
         }
     }
 
