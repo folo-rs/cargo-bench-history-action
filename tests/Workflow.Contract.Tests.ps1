@@ -267,7 +267,7 @@ Describe 'Historical backfill graph behavior' {
             }
         }
         $backfill.on.workflow_call.inputs.Keys | Sort-Object |
-            Should -Be (@($common + @('from', 'to', 'lookback', 'minimum-age', 'max-commits', 'ignore-errors', 'best-effort')) | Sort-Object)
+            Should -Be (@($common + @('from', 'to', 'lookback', 'minimum-age', 'max-commits', 'ignore-errors')) | Sort-Object)
         foreach ($key in @('from', 'to', 'lookback', 'minimum-age', 'max-commits')) {
             [bool] $backfill.on.workflow_call.inputs[$key]['required'] | Should -BeFalse
             $backfill.on.workflow_call.inputs[$key].type | Should -BeExactly 'string'
@@ -410,22 +410,27 @@ Describe 'Historical backfill graph behavior' {
         }
     }
 
-    It 'requires an explicit best-effort opt-in independently of per-commit errors' {
+    It 'keeps job failures visible independently of the per-commit error policy' {
         $defaults = @{}
         foreach ($key in $backfill.on.workflow_call.inputs.Keys) {
             $defaults[$key] = $backfill.on.workflow_call.inputs[$key]['default']
         }
         $command = @($work.steps | Where-Object { $_['uses'] -ceq '$/' })[0]
-        Expand-ContractValue $work['continue-on-error'] @{ inputs = $defaults } | Should -BeFalse
+        $backfill.on.workflow_call.inputs['ignore-errors'].type | Should -BeExactly 'boolean'
         Expand-ContractValue $command.with['ignore-errors'] @{ inputs = $defaults } | Should -BeFalse
-        foreach ($bestEffort in @($false, $true)) {
-            foreach ($ignoreErrors in @($false, $true)) {
-                $values = @{ inputs = @{ 'best-effort' = $bestEffort; 'ignore-errors' = $ignoreErrors } }
-                Expand-ContractValue $work['continue-on-error'] $values | Should -Be $bestEffort
-                Expand-ContractValue $command.with['ignore-errors'] $values | Should -Be $ignoreErrors
+        foreach ($ignoreErrors in @($false, $true)) {
+            $values = @{ inputs = @{ 'ignore-errors' = $ignoreErrors } }
+            Expand-ContractValue $command.with['ignore-errors'] $values | Should -Be $ignoreErrors
+        }
+        foreach ($job in $backfill.jobs.Values) {
+            $job.ContainsKey('continue-on-error') | Should -BeFalse
+            foreach ($step in $job.steps) {
+                $step.ContainsKey('continue-on-error') | Should -BeFalse
             }
         }
-        $prepare.ContainsKey('continue-on-error') | Should -BeFalse
+        foreach ($step in $rootAction.runs.steps) {
+            $step.ContainsKey('continue-on-error') | Should -BeFalse
+        }
         $work['timeout-minutes'] | Should -Be $history.jobs.collect['timeout-minutes']
         $work.strategy['fail-fast'] | Should -BeFalse
     }
@@ -448,7 +453,6 @@ Describe 'Historical backfill graph behavior' {
         $commands[0].with.command | Should -BeExactly 'backfill'
         $commands[0].with['on-existing'] | Should -BeExactly 'skip'
         $commands[0].with.ContainsKey('packages') | Should -BeFalse
-        $commands[0].with.ContainsKey('best-effort') | Should -BeFalse
         $commands[0].with.ContainsKey('context') | Should -BeFalse
         $prepare.outputs.Keys | Sort-Object |
             Should -Be @('expected-platforms', 'from', 'has-work', 'instance', 'matrix', 'skipped', 'to')

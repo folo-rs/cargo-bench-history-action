@@ -127,10 +127,9 @@ platform queues also serialize callers using different configuration paths for t
 same project. Each platform retains the hosted six-hour ceiling as an exceptional
 watchdog and does not cancel other matrix legs on failure. A commit budget is not
 a deadline; even a single attempt can exceed that ceiling.
-`ignore-errors` defaults to false and controls the
-core's per-commit build/benchmark failure policy, not infrastructure failures.
-`best-effort` separately defaults to false and explicitly opts into ignoring a
-matrix job failure. It does not make timeout cancellation successful.
+`ignore-errors` defaults to false and controls the core's per-commit
+build/benchmark failure policy, not infrastructure failures. The workflow does
+not suppress job failures or hosted timeout cancellations.
 
 Backfill uses history's same-repository/open-event work selection and excludes
 `pull_request_target`. It produces no receipts, analysis, reports, publication or
@@ -198,8 +197,10 @@ Older release runs cannot move the floating major tag backwards.
 
 Changes to distributed runtime, consumer reusable workflows or manifest pins require
 a newer action version. Documentation, tests and CI-only maintenance can retain the
-current version. Publication may reconcile a missing release or major ref on retry,
-but unchanged release-bearing content never relocates the immutable version tag.
+current version. Incompatible public action or workflow input changes require a
+new major version; compatible feature additions use a minor version.
+Publication may reconcile a missing release or major ref on retry, but unchanged
+release-bearing content never relocates the immutable version tag.
 
 Monorepo tool changes have a cross-linked action PR. The monorepo publishes first;
 the action PR then passes its installation gate before merging. Publication in the

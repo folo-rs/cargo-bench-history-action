@@ -83,10 +83,6 @@ on:
         description: Continue past individual commit build or benchmark failures, not infrastructure errors.
         type: boolean
         default: false
-      best-effort:
-        description: Opt into ignoring a backfill matrix job failure; does not make timeout cancellation successful.
-        type: boolean
-        default: false
 
 permissions: {}
 
@@ -150,7 +146,6 @@ jobs:
     # Exceptional watchdog, not a successful stop; max-commits bounds normal work.
     # Ref: ../../docs/design.md#historical-backfill.
     timeout-minutes: 360
-    continue-on-error: ${{ inputs.best-effort }}
     permissions:
       contents: read
       id-token: write

@@ -190,10 +190,11 @@ locations independently of event, SHA or run identity. Its `cbh-backfill-work`
 job queues use canonical project/platform identities so aliased configurations
 cannot race. Distinct prefixes prevent a workflow from waiting on its own queue;
 both levels use `cancel-in-progress: false` and `queue: max`. Matrix fail-fast is
-disabled. `best-effort` binds only the backfill job's `continue-on-error`, while
-`ignore-errors` is passed independently to the core through the root action.
-The hosted timeout remains an exceptional watchdog, not a normal completion
-mechanism: `continue-on-error` does not make its cancellation successful.
+disabled so one platform's failure does not cancel other platforms. No backfill
+job or step suppresses execution failures. `ignore-errors` is passed to the core
+through the root action and controls only its per-commit failure policy.
+The hosted timeout remains an exceptional watchdog whose cancellation is visible,
+not a normal completion mechanism.
 
 Collection records a receipt only after the root command and actual key capture
 succeed. Artifacts include project, flow, platform and attempt; downloads use the
