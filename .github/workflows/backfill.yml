@@ -27,6 +27,10 @@ on:
         description: Minimum age for automatic endpoint selection; requires lookback.
         type: string
         default: ''
+      max-commits:
+        description: Positive integer limit on attempted commits per platform after skipping existing measurements. Empty means unlimited.
+        type: string
+        default: ''
       platforms:
         description: Comma-separated collection runner labels.
         type: string
@@ -80,7 +84,7 @@ on:
         type: boolean
         default: false
       best-effort:
-        description: Opt into ignoring a backfill matrix job failure or hosted-runner timeout.
+        description: Opt into ignoring a backfill matrix job failure; does not make timeout cancellation successful.
         type: boolean
         default: false
 
@@ -143,7 +147,8 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.skipped == 'false' && needs.prepare.outputs.has-work == 'true'
     runs-on: ${{ matrix.platform }}
-    # Match history's hosted-runner ceiling; best-effort is an explicit caller policy.
+    # Exceptional watchdog, not a successful stop; max-commits bounds normal work.
+    # Ref: ../../docs/design.md#historical-backfill.
     timeout-minutes: 360
     continue-on-error: ${{ inputs.best-effort }}
     permissions:
@@ -180,6 +185,7 @@ jobs:
           config: ${{ steps.context.outputs.config }}
           from: ${{ needs.prepare.outputs.from }}
           to: ${{ needs.prepare.outputs.to }}
+          max-commits: ${{ inputs.max-commits }}
           exclude: ${{ inputs.exclude }}
           bench: ${{ inputs.bench }}
           best-of: ${{ inputs.best-of }}

@@ -110,13 +110,24 @@ no current-head scope detection, empty-scope skip, public package list or scope
 selector. The common exclusions and benchmark/feature options apply to historical
 collection. Existing measurements are always skipped for resumable reruns.
 
+Optional `max-commits` is a positive integer string accepted only for backfill.
+Omission or an empty value means unlimited replay. Each platform independently
+counts actual replay attempts after skipping already-recorded commits in its
+current target/machine partition. Empty results, ignored failures and duplicates
+detected at write time still consume an attempt; only precheck skips are free.
+After the final allowed attempt completes normal storage and cleanup, execution
+stops successfully without starting another attempt. The CLI reports processed
+and deferred work and the stop reason. The limit does not change error policy.
+
 Every invocation queues without cancellation or replacement. Canonical project and
 platform queues also serialize callers using different configuration paths for the
-same project. Each platform has the hosted six-hour ceiling and does not cancel
-other matrix legs on failure. `ignore-errors` defaults to false and controls the
+same project. Each platform retains the hosted six-hour ceiling as an exceptional
+watchdog and does not cancel other matrix legs on failure. A commit budget is not
+a deadline; even a single attempt can exceed that ceiling.
+`ignore-errors` defaults to false and controls the
 core's per-commit build/benchmark failure policy, not infrastructure failures.
 `best-effort` separately defaults to false and explicitly opts into ignoring a
-matrix job failure or hosted-runner timeout.
+matrix job failure. It does not make timeout cancellation successful.
 
 Backfill uses history's same-repository/open-event work selection and excludes
 `pull_request_target`. It produces no receipts, analysis, reports, publication or

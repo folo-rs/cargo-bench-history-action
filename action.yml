@@ -53,6 +53,9 @@ inputs:
     description: Start of the backfill range.
   to:
     description: End of the backfill range.
+  max-commits:
+    description: Backfill only; positive integer limit on attempted commits after skipping existing measurements. Empty means unlimited.
+    default: ''
   ignore-errors:
     description: Continue backfill after individual measurement failures (true or false).
   body-file:

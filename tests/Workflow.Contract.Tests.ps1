@@ -183,6 +183,21 @@ Describe 'Reusable <flow> workflow contracts' -ForEach @(
         }
     }
 
+    It 'accepts a commit budget only for backfill execution, not other flows or preparation' {
+        $workflow.on.workflow_call.inputs.ContainsKey('max-commits') | Should -Be ($flow -eq 'backfill')
+        foreach ($job in $workflow.jobs.Values) {
+            foreach ($step in $job.steps) {
+                $isBackfill = $step['uses'] -ceq '$/' -and $step.with.command -ceq 'backfill'
+                if ($step['with']) { $step.with.ContainsKey('max-commits') | Should -Be $isBackfill }
+                if ($step['env']) {
+                    foreach ($value in $step.env.Values) {
+                        @([regex]::Matches([string] $value, 'inputs\.max-commits')).Count | Should -Be 0
+                    }
+                }
+            }
+        }
+    }
+
     It 'preserves workspace and prepared-package collection as distinct root contracts' {
         foreach ($job in $workflow.jobs.Values) {
             foreach ($step in $job['steps'] | Where-Object { $_['uses'] -ceq '$/' -and $_.with.command -ceq 'collect' }) {
@@ -252,12 +267,28 @@ Describe 'Historical backfill graph behavior' {
             }
         }
         $backfill.on.workflow_call.inputs.Keys | Sort-Object |
-            Should -Be (@($common + @('from', 'to', 'lookback', 'minimum-age', 'ignore-errors', 'best-effort')) | Sort-Object)
-        foreach ($key in @('from', 'to', 'lookback', 'minimum-age')) {
+            Should -Be (@($common + @('from', 'to', 'lookback', 'minimum-age', 'max-commits', 'ignore-errors', 'best-effort')) | Sort-Object)
+        foreach ($key in @('from', 'to', 'lookback', 'minimum-age', 'max-commits')) {
             [bool] $backfill.on.workflow_call.inputs[$key]['required'] | Should -BeFalse
             $backfill.on.workflow_call.inputs[$key].type | Should -BeExactly 'string'
             $backfill.on.workflow_call.inputs[$key].default | Should -BeExactly ''
         }
+    }
+
+    It 'preserves the exact commit budget string and leaves omitted input unlimited' {
+        [bool] $rootAction.inputs['max-commits']['required'] | Should -BeFalse
+        $rootAction.inputs['max-commits'].default | Should -BeExactly ''
+        $default = $backfill.on.workflow_call.inputs['max-commits'].default
+        $default | Should -BeExactly $rootAction.inputs['max-commits'].default
+        $command = @($work.steps | Where-Object { $_['uses'] -ceq '$/' })[0]
+        # The largest supported native integer also detects lossy JSON-number conversion.
+        foreach ($limit in @($default, '1', [uint64]::MaxValue.ToString())) {
+            $actual = Expand-ContractValue $command.with['max-commits'] @{ inputs = @{ 'max-commits' = $limit } }
+            $actual | Should -BeOfType ([string])
+            $actual | Should -BeExactly $limit
+        }
+        $bootstrap = @($rootAction.runs.steps | Where-Object { $_['id'] -ceq 'prepare' })[0]
+        $bootstrap.env.CBH_INPUTS_JSON | Should -BeExactly '${{ toJSON(inputs) }}'
     }
 
     It 'hands scheduling choices to preparation but gives execution only a frozen range' -ForEach @(
