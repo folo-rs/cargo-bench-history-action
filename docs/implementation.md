@@ -35,6 +35,13 @@ The output file is the current step's `GITHUB_OUTPUT`. The temporary root is out
 the measured checkout. Publication uses the normal ambient GitHub repository/run
 context where an explicit execution-data input is absent.
 
+`max-commits` is an optional backfill-only runtime string. The reusable workflow
+and root action default it to `''`; the JSON handoff preserves that empty string
+for unlimited replay and preserves supplied values without numeric conversion.
+The companion validates a nonzero Rust `usize`, rejects nonempty values on other
+commands and forwards `--max-commits` to the core backfill command. PowerShell owns
+neither this validation nor attempt accounting.
+
 `rustflags` remains an opaque runtime string in this handoff. Workflows forward it
 only to root `collect` and `backfill` invocations, not to preparation, setup,
 installation, analysis or publication. PowerShell leaves both ambient flag
@@ -171,18 +178,23 @@ operations do not perform this checkout wiring.
 Each matrix job then passes the prepared `to` SHA as that adapter's measurement
 head, fetching full history even if the original remote branch has moved.
 Invocation configuration, setup and source installation use the adapter unchanged.
-The root `backfill` command receives only the frozen range and common collection
-options, with `on-existing: skip`; rolling inputs never reach the explicit-range
-executor. First-parent validity and traversal stay in the
-main executable. The graph has no receipt, analysis, artifact or sink jobs.
+The root `backfill` command receives the frozen range, optional `max-commits` and
+common collection options, with `on-existing: skip`; rolling inputs never reach
+the explicit-range executor. `max-commits` goes only to execution, not preparation
+or setup. First-parent validity, traversal and the per-platform attempt budget
+stay in the main executable. Its normal summary describes processed and deferred
+work; the graph has no receipt, analysis, artifact or sink jobs.
 
 Backfill's `cbh-backfill-run` workflow queue groups repository/configuration
 locations independently of event, SHA or run identity. Its `cbh-backfill-work`
 job queues use canonical project/platform identities so aliased configurations
 cannot race. Distinct prefixes prevent a workflow from waiting on its own queue;
 both levels use `cancel-in-progress: false` and `queue: max`. Matrix fail-fast is
-disabled. `best-effort` binds only the backfill job's `continue-on-error`, while
-`ignore-errors` is passed independently to the core through the root action.
+disabled so one platform's failure does not cancel other platforms. No backfill
+job or step suppresses execution failures. `ignore-errors` is passed to the core
+through the root action and controls only its per-commit failure policy.
+The hosted timeout remains an exceptional watchdog whose cancellation is visible,
+not a normal completion mechanism.
 
 Collection records a receipt only after the root command and actual key capture
 succeed. Artifacts include project, flow, platform and attempt; downloads use the
