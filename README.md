@@ -28,7 +28,7 @@ jobs:
       actions: read
       id-token: write
       issues: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v1
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v2
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -49,7 +49,7 @@ jobs:
       actions: read
       id-token: write
       pull-requests: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@v1
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@v2
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -106,8 +106,8 @@ optional `to` override. Inputs are:
 | `to` | Empty | Backfill-only explicit range end or rolling endpoint override. |
 | `lookback` | Empty | Backfill-only nonzero rolling duration; pair with `minimum-age`, without `from`. |
 | `minimum-age` | Empty | Backfill-only minimum age for an automatic endpoint; may be zero. |
+| `max-commits` | Empty (unlimited) | Backfill-only positive integer string limiting attempted commits per platform after skipping existing measurements. |
 | `ignore-errors` | `false` | Backfill only: continue past individual commit build or benchmark failures; infrastructure errors remain failures. |
-| `best-effort` | `false` | Backfill only: opt into ignoring a matrix job failure or hosted-runner timeout. |
 
 History and PR return `outcome`, `publication-state`, `notable`, `regressions`,
 `partial-platform-coverage`, `report-artifact-id` and `report-artifact-url` when
@@ -156,7 +156,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v1
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v2
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -181,7 +181,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v1
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v2
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -207,12 +207,25 @@ fixed setup hook and optional source-built tools still come from the invocation
 checkout. The main tool validates and traverses the first-parent range.
 
 Existing measurements are always skipped, making repeat invocations resumable.
+Optionally set `max-commits: '1'` in the caller's `with:` block to attempt at most
+one missing commit per platform. The input is a positive integer string; omission
+or an empty string leaves the range unlimited. Each platform has its own budget
+and attempts the newest missing commits first. Already-recorded commits in the
+current target/machine partition are skipped before counting and are not deferred.
+Every attempted replay counts, including attempts with no measurements,
+ignored failures and duplicates detected when writing. The current attempt finishes
+with normal storage and cleanup before a successful budget stop; no next attempt
+starts. The CLI summary reports stored, skipped, failed and deferred work and the
+stop reason.
+
 Invocations queue without cancelling or replacing earlier backfills; work also
 queues by canonical project and platform, including when configuration paths alias
-the same project. Each matrix job has the hosted six-hour budget, and a failed
-platform does not cancel the other platforms. Failures remain visible unless the
-caller explicitly opts into `best-effort`; `ignore-errors` independently controls
-the main tool's per-commit failure policy.
+the same project. Each matrix job retains the hosted six-hour ceiling as an
+exceptional watchdog, and a failed platform does not cancel the other platforms.
+A commit limit is not a time limit: a single attempt can still exceed the watchdog.
+The workflow does not suppress job failures or hosted timeout cancellations.
+`ignore-errors` controls only the main tool's per-commit build/benchmark failure
+policy and defaults to false; a commit limit does not suppress failures.
 
 Backfill performs no analysis or publication, uploads no receipts or reports, and
 has no public outputs. Fork-origin, `pull_request_target` and closed PR events start
@@ -259,7 +272,7 @@ that flow. Cloud analysis may use `cache` for its local read cache.
 The root composite exposes individual commands for custom workflows. Callers of
 this lower layer own checkout, prerequisites, dependencies, concurrency, collection
 evidence and artifact transport. Analysis never publishes, and the root action
-never uploads reports. A full commit reference can replace `@v1` when a consumer
+never uploads reports. A full commit reference can replace `@v2` when a consumer
 wants immutable version selection.
 
 This example keeps local measurement history in a caller-owned cache, collects on
@@ -290,7 +303,7 @@ jobs:
           path: ${{ runner.temp }}/measurement-history
           key: measurements-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: measurements-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}-
-      - uses: folo-rs/cargo-bench-history-action@v1
+      - uses: folo-rs/cargo-bench-history-action@v2
         id: collect
         with:
           command: collect
@@ -308,7 +321,7 @@ jobs:
           New-Item -ItemType Directory -Path $platformDirectory | Out-Null
           $env:CBH_MACHINE_KEY | Set-Content -LiteralPath (Join-Path $platformDirectory 'machine-key.txt')
           "directory=$directory" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
-      - uses: folo-rs/cargo-bench-history-action@v1
+      - uses: folo-rs/cargo-bench-history-action@v2
         id: analyze
         with:
           command: analyze-history
@@ -341,7 +354,7 @@ Publication is a separate step after upload. For example, history findings can b
 published with the following step in a job granted `issues: write`:
 
 ```yaml
-- uses: folo-rs/cargo-bench-history-action@v1
+- uses: folo-rs/cargo-bench-history-action@v2
   if: steps.analyze.outputs.publication-state == 'findings'
   with:
     command: publish-issue-findings
@@ -377,11 +390,14 @@ defaults are empty: the Rust runtime applies per-command defaults and rejects
 inapplicable inputs. Inputs are strings, including `"true"`/`"false"` boolean inputs.
 The root metadata in [action.yml](action.yml) describes every input.
 
+For `command: backfill`, optional `max-commits` has the same attempted-commit
+semantics as the reusable backfill workflow. Leave it empty for unlimited work.
+
 `working-directory` defaults to the caller's current directory. It selects the
 measured/configuration checkout, not the tool's source checkout. In source mode:
 
 ```yaml
-- uses: folo-rs/cargo-bench-history-action@v1
+- uses: folo-rs/cargo-bench-history-action@v2
   with:
     command: collect
     install-method: path

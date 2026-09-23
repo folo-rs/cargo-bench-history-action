@@ -164,6 +164,38 @@ exit ([int] $env:CBH_FIXTURE_EXIT)
         }
     }
 
+    It 'forwards the commit budget unchanged for Rust validation (<case>)' -ForEach @(
+        @{ case = 'empty unlimited default'; command = 'backfill'; limit = '' }
+        @{ case = 'empty metadata on another command'; command = 'analyze-history'; limit = '' }
+        @{ case = 'single attempt'; command = 'backfill'; limit = '1' }
+        @{ case = 'largest native integer'; command = 'backfill'; limit = [uint64]::MaxValue.ToString() }
+        @{ case = 'zero'; command = 'backfill'; limit = '0' }
+        @{ case = 'negative'; command = 'backfill'; limit = '-1' }
+        @{ case = 'fractional'; command = 'backfill'; limit = '1.5' }
+        @{ case = 'native integer overflow'; command = 'backfill'; limit = "$([uint64]::MaxValue)0" }
+        @{ case = 'literal input, not shell code'; command = 'backfill'; limit = "1; '`$literal'" }
+    ) {
+        Invoke-Preparation @{
+            command = $command
+            'install-method' = 'install'
+            'max-commits' = $limit
+        } | Out-Null
+        & $script:entryPoint -Stage install
+        $env:GITHUB_OUTPUT = Join-Path $TestDrive 'budget-output'
+        & $script:entryPoint -Stage invoke
+        $captured = Get-Content -LiteralPath $env:CBH_FIXTURE_CAPTURE -Raw | ConvertFrom-Json -AsHashtable
+        $captured.inputs.ContainsKey('max-commits') | Should -BeTrue
+        $captured.inputs['max-commits'] | Should -BeOfType ([string])
+        $captured.inputs['max-commits'] | Should -BeExactly $limit
+    }
+
+    It 'does not inject a commit budget when bootstrap input omits it' {
+        $outputs = Invoke-Preparation @{ command = 'backfill' }
+        $state = Get-Content -LiteralPath $outputs['state-path'] -Raw | ConvertFrom-Json -AsHashtable
+        $inputs = Get-Content -LiteralPath $state.inputPath -Raw | ConvertFrom-Json -AsHashtable
+        $inputs.ContainsKey('max-commits') | Should -BeFalse
+    }
+
     It 'forwards unknown empty keys into the runtime JSON for strict name validation' {
         Invoke-Preparation @{
             command = 'alert'
