@@ -210,12 +210,14 @@ checkout. The main tool validates and traverses the first-parent range.
 Existing measurements are always skipped, making repeat invocations resumable.
 Optionally set `max-commits: '1'` in the caller's `with:` block to attempt at most
 one missing commit per platform. The input is a positive integer string; omission
-or an empty string leaves the range unlimited. Each platform has its own budget.
-Already-recorded commits in the current target/machine partition are skipped before
-counting. Every attempted replay counts, including attempts with no measurements,
+or an empty string leaves the range unlimited. Each platform has its own budget
+and attempts the newest missing commits first. Already-recorded commits in the
+current target/machine partition are skipped before counting and are not deferred.
+Every attempted replay counts, including attempts with no measurements,
 ignored failures and duplicates detected when writing. The current attempt finishes
 with normal storage and cleanup before a successful budget stop; no next attempt
-starts. The CLI summary reports processed and deferred work and the stop reason.
+starts. The CLI summary reports stored, skipped, failed and deferred work and the
+stop reason.
 
 Invocations queue without cancelling or replacing earlier backfills; work also
 queues by canonical project and platform, including when configuration paths alias

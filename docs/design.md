@@ -112,12 +112,15 @@ collection. Existing measurements are always skipped for resumable reruns.
 
 Optional `max-commits` is a positive integer string accepted only for backfill.
 Omission or an empty value means unlimited replay. Each platform independently
-counts actual replay attempts after skipping already-recorded commits in its
-current target/machine partition. Empty results, ignored failures and duplicates
+counts actual replay attempts, newest missing commit first, after skipping
+already-recorded commits in its current target/machine partition. Existing
+measurements anywhere in the range are skipped, not deferred.
+Empty results, ignored failures and duplicates
 detected at write time still consume an attempt; only precheck skips are free.
 After the final allowed attempt completes normal storage and cleanup, execution
-stops successfully without starting another attempt. The CLI reports processed
-and deferred work and the stop reason. The limit does not change error policy.
+stops successfully without starting another attempt. The CLI reports stored,
+skipped, failed and deferred work and the stop reason. The limit does not change
+error policy.
 
 Every invocation queues without cancellation or replacement. Canonical project and
 platform queues also serialize callers using different configuration paths for the
