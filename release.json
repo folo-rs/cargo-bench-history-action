@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "2.0.2",
+  "version": "2.0.3",
   "tools": [
     {
       "name": "cargo-bench-history",
@@ -11,7 +11,7 @@
     {
       "name": "cargo-bench-history-github",
       "binary": "cargo-bench-history-github",
-      "version": "0.2.12",
+      "version": "0.2.13",
       "role": "companion"
     },
     {
