@@ -44,6 +44,18 @@ The internal report namespace follows the core's canonical storage project ident
 It has no consumer override. Source/configuration inputs and process arguments remain
 data, not interpolated shell programs.
 
+### Peak-memory analysis
+
+Available `alloc_tracker` peak outstanding-byte measurements participate in history
+and PR analysis by default, alongside the existing metrics. There is no action
+input or analysis setting to enable them.
+
+Accumulating live memory between benchmark iterations makes peaks depend on the
+harness-selected batch size and can cause false regression alerts. Producers use
+`ThreadSpan::no_peak()` in `alloc_tracker` 0.7.12 or later to withhold unreliable
+peaks while preserving allocated bytes and allocation counts. The span remains
+alive across the measured work. An unavailable peak remains absent, not zero.
+
 ## Shared workflow behavior
 
 The workflow owns its collect matrix; a caller matrix is not required. Each
@@ -205,3 +217,6 @@ release-bearing content never relocates the immutable version tag.
 Monorepo tool changes have a cross-linked action PR. The monorepo publishes first;
 the action PR then passes its installation gate before merging. Publication in the
 other repository does not automatically rerun a failed action check.
+An action PR opened before its monorepo PR records the originating issue and the
+outstanding reciprocal-link obligation. Both PR descriptions link one another
+before the action merges.

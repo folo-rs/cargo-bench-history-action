@@ -11,6 +11,10 @@ and storage-key helpers, drives the main executable with argument vectors, and
 reuses the existing evidence and publication implementations. Long-running tool
 execution streams its diagnostics rather than accumulating benchmark logs.
 
+Peak outstanding-byte ingestion, default analysis and missing-peak handling belong
+to the pinned Rust tools. Producer-side `ThreadSpan::no_peak()` belongs to
+`alloc_tracker`; the action neither filters metrics nor adds an opt-in flag.
+
 ## Bootstrap interface
 
 `scripts/Tools.psm1` owns `Read-ActionManifest`, `Get-RequiredTool`,
@@ -218,6 +222,9 @@ validation and release reconciliation using mocked process results. Real canarie
 exercise the same installer and root action with isolated roots.
 `.github/monorepo-revision` selects the source checkout for path-mode canaries and is
 test configuration, not a consumer version override.
+Tool-pin releases select the full monorepo commit carrying the paired implementation
+and version plan. That commit must be available on GitHub before source-path checks
+can pass; source success does not establish published-tool availability.
 
 The release job operates after the matrix availability gate and uses the runner's
 PowerShell, Git and GitHub CLI to reconcile repository refs/releases. This is
