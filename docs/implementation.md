@@ -301,6 +301,19 @@ than only the native filesystem assertions. Artifacts are distinct by installati
 method, target and run attempt; they remain available for diagnostics even when
 the report assertions fail.
 
+Each canary permits one upload-only retry through the same official action, avoiding
+another installation for a transient artifact-service failure while bounding repeated
+failures. The retry uses a distinct artifact name because a failed finalization may
+leave the original name occupied. Only the initial upload permits `continue-on-error`;
+a final assertion requires a successful step outcome and emits a warning for recovery.
+Upload attempts and the assertion retain the same successful-analysis, policy-skip
+and cancellation guards, independently of earlier report-assertion failures.
+The retry applies to any upload failure, preserves missing-file errors and does not
+change the required installation gate or consumer workflows. Artifact-service
+failures are tracked in [issue #2](https://github.com/folo-rs/cargo-bench-history-action/issues/2);
+selective upstream retry handling is tracked in
+[actions/toolkit#2452](https://github.com/actions/toolkit/pull/2452).
+
 ### Version readiness and reconciliation
 
 Release-bearing paths are `action.yml`/`action.yaml`, `release.json`, scripts,
