@@ -11,7 +11,7 @@
     {
       "name": "cargo-bench-history-github",
       "binary": "cargo-bench-history-github",
-      "version": "0.2.21",
+      "version": "0.2.22",
       "role": "companion"
     },
     {
