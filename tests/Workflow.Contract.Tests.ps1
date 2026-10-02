@@ -472,6 +472,13 @@ Describe 'Same-runner backfill canary wiring in <file>' -ForEach @(
         }
     }
 
+    It 'pins the Rust bootstrap implementation while retaining the rolling stable compiler' {
+        $bootstrap = @($canaryJob.steps | Where-Object { $_['uses'] -clike 'dtolnay/rust-toolchain@*' })
+        $bootstrap.Count | Should -Be 1
+        $bootstrap[0].uses | Should -Match '^dtolnay/rust-toolchain@[0-9a-f]{40}$'
+        $bootstrap[0].with.toolchain | Should -BeExactly 'stable'
+    }
+
     It 'backfills between collection and analysis without another root-action installation' {
         $ids = @($canaryJob.steps | ForEach-Object { $_['id'] })
         [array]::IndexOf($ids, 'backfill') | Should -BeGreaterThan ([array]::IndexOf($ids, 'collect'))
@@ -491,5 +498,28 @@ Describe 'Same-runner backfill canary wiring in <file>' -ForEach @(
             $condition = $canarySteps.backfill.if.Replace('steps.collect.outputs.skipped', 'needs.prepare.outputs.skipped')
             Test-SelectionCondition $condition $skipped $false $false | Should -Be (-not $skipped)
         }
+    }
+}
+
+Describe 'CI bootstrap update coverage' {
+    It 'keeps both canaries on the same bootstrap implementation' {
+        $references = foreach ($file in @('test', 'install-tools')) {
+            $ciWorkflow = Get-Content (Join-Path $root ".github\workflows\$file.yml") -Raw | ConvertFrom-Yaml
+            foreach ($job in $ciWorkflow.jobs.Values) {
+                foreach ($step in $job['steps']) {
+                    if ($step['uses'] -clike 'dtolnay/rust-toolchain@*') { $step.uses }
+                }
+            }
+        }
+        @($references | Select-Object -Unique).Count | Should -Be 1
+    }
+
+    It 'checks workflow action references weekly through Dependabot' {
+        $dependabot = Get-Content (Join-Path $root '.github\dependabot.yml') -Raw | ConvertFrom-Yaml
+        $dependabot.version | Should -Be 2
+        $updates = @($dependabot.updates | Where-Object { $_['package-ecosystem'] -ceq 'github-actions' })
+        $updates.Count | Should -Be 1
+        $updates[0].directory | Should -BeExactly '/'
+        $updates[0].schedule.interval | Should -BeExactly 'weekly'
     }
 }

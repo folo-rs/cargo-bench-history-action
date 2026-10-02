@@ -96,7 +96,11 @@ jobs:
           ref: ${{ needs.setup.outputs.source }}
           path: Folo
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      # Pin reviewed master code independently of the compiler channel.
+      # Ref: docs/implementation.md, "CI evidence".
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: stable
       - name: Prepare isolated synthetic benchmark fixture
         id: fixture
         shell: pwsh
