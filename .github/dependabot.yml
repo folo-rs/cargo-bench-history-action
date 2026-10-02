@@ -1,0 +1,8 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      # Propose updates for review without changing the rolling compiler channel.
+      # Ref: docs/implementation.md, "CI evidence".
+      interval: weekly
