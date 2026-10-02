@@ -232,6 +232,10 @@ of the published-tool gate. Source smoke checks out the exact monorepo revision 
 `Folo`; neither its source path nor its isolated measurement workspace selects a
 released tool version.
 
+The source and published-tool canaries pin `dtolnay/rust-toolchain` to the same
+reviewed full commit SHA and explicitly select `toolchain: stable`. Bootstrap
+implementation updates require review independently of the rolling stable compiler.
+
 The shared `install-tools.yml` workflow derives an install/binstall matrix from the
 current checkout's manifest, not a released action. Each leg checks that the Rust
 host matches its declared target and uses absent installation roots. It downloads
