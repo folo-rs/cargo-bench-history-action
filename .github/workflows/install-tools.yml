@@ -48,9 +48,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # Pin bootstrap code independently of the compiler channel.
+      # Pin reviewed master code independently of the compiler channel.
       # Ref: docs/implementation.md, "CI evidence".
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
         with:
           toolchain: stable
       - name: Bootstrap official cargo-binstall

@@ -233,8 +233,24 @@ of the published-tool gate. Source smoke checks out the exact monorepo revision 
 released tool version.
 
 The source and published-tool canaries pin `dtolnay/rust-toolchain` to the same
-reviewed full commit SHA and explicitly select `toolchain: stable`. Bootstrap
-implementation updates require review independently of the rolling stable compiler.
+reviewed full commit SHA from upstream `master` and explicitly select
+`toolchain: stable`. Upstream requires pins from
+[`master` history](https://github.com/dtolnay/rust-toolchain#choice-of-full-length-commit-sha);
+its generated compiler-selection branches are not durable sources for SHA pins.
+
+Dependabot checks GitHub Actions references weekly and proposes updates for review,
+not automatic merging. Bootstrap updates retain the full SHA and compiler input;
+reviewers verify membership in upstream `master` and inspect the implementation
+changes before accepting a proposal. Dependabot infers its update source from the
+SHA's matching tag or containing branch, not from the compiler input or comments.
+The upstream [`v1` tag is unsupported](https://github.com/dtolnay/rust-toolchain/issues/114)
+and is not a release-approval signal. Check the first Dependabot update log after
+enabling the configuration on the default branch, and inspect its selected source
+if upstream `master` advances without a proposal.
+
+Manifest tool pins and explicit action inputs such as cargo-binstall's `version`
+remain separately maintained. Dependency updates still obey version-readiness and
+published-availability gates.
 
 The shared `install-tools.yml` workflow derives an install/binstall matrix from the
 current checkout's manifest, not a released action. Each leg checks that the Rust
