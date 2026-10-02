@@ -124,7 +124,11 @@ jobs:
           & .\tests\Assert-Canary.ps1 -Workspace $env:CANARY_WORKSPACE -Store $env:CANARY_STORE `
             -MachineKey $env:CANARY_KEY -CollectionJson $env:CANARY_COLLECTION -AnalysisJson $env:CANARY_ANALYSIS
       - name: Upload emitted reports through the consumer artifact action
+        id: upload-reports
         if: ${{ !cancelled() && steps.analyze.outcome == 'success' && steps.analyze.outputs.skipped != 'true' }}
+        # The final assertion requires an upload; only this attempt may recover.
+        # Ref: docs/implementation.md, "CI evidence".
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: canary-reports-${{ matrix.method }}-${{ matrix.rust_target }}-${{ github.run_attempt }}
@@ -134,3 +138,29 @@ jobs:
             ${{ steps.analyze.outputs.report-markdown }}
             ${{ steps.analyze.outputs.report-json }}
             ${{ steps.analyze.outputs.report-summary }}
+      - name: Retry emitted report upload
+        id: upload-reports-retry
+        if: ${{ !cancelled() && steps.analyze.outcome == 'success' && steps.analyze.outputs.skipped != 'true' && steps.upload-reports.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          # A failed finalization can leave an artifact with the original name.
+          name: canary-reports-${{ matrix.method }}-${{ matrix.rust_target }}-${{ github.run_attempt }}-retry
+          if-no-files-found: error
+          path: |
+            ${{ steps.analyze.outputs.report-markdown }}
+            ${{ steps.analyze.outputs.report-json }}
+            ${{ steps.analyze.outputs.report-summary }}
+      - name: Require a successful report upload
+        id: require-report-upload
+        if: ${{ !cancelled() && steps.analyze.outcome == 'success' && steps.analyze.outputs.skipped != 'true' }}
+        shell: pwsh
+        env:
+          CANARY_UPLOAD_OUTCOME: ${{ steps.upload-reports.outcome }}
+          CANARY_RETRY_OUTCOME: ${{ steps.upload-reports-retry.outcome }}
+        run: |
+          if ($env:CANARY_UPLOAD_OUTCOME -cne 'success' -and $env:CANARY_RETRY_OUTCOME -cne 'success') {
+            throw "Report upload did not succeed: initial=$env:CANARY_UPLOAD_OUTCOME, retry=$env:CANARY_RETRY_OUTCOME"
+          }
+          if ($env:CANARY_UPLOAD_OUTCOME -ceq 'failure' -and $env:CANARY_RETRY_OUTCOME -ceq 'success') {
+            Write-Output '::warning::Canary report artifact upload recovered on retry; see the initial upload step for diagnostics.'
+          }

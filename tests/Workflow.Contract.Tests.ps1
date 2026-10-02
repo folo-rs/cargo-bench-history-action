@@ -68,6 +68,22 @@ BeforeAll {
         if ($expression -match 'github\.|\$\{\{') { throw 'Unsupported event expression.' }
         return & ([scriptblock]::Create($expression))
     }
+
+    function Test-CanaryUploadCondition {
+        param([string] $Condition, [bool] $Cancelled, [string] $AnalysisOutcome,
+            [string] $Skipped, [string] $UploadOutcome)
+        # As with the selection helpers above, evaluate only the actual boolean
+        # predicates, not GitHub's job execution or implicit status handling.
+        $expression = $Condition.Trim() -replace '^\$\{\{\s*|\s*\}\}$', ''
+        $expression = $expression.Replace('cancelled()', "`$$($Cancelled.ToString().ToLowerInvariant())")
+        $expression = $expression.Replace('steps.analyze.outcome', "'$AnalysisOutcome'")
+        $expression = $expression.Replace('steps.analyze.outputs.skipped', "'$Skipped'")
+        $expression = $expression.Replace('steps.upload-reports.outcome', "'$UploadOutcome'")
+        $expression = $expression.Replace('!=', ' -ne ').Replace('==', ' -eq ')
+        $expression = $expression.Replace('&&', ' -and ').Replace('!', ' -not ')
+        if ($expression -match 'steps\.|\(\)|\$\{\{|\|\|') { throw 'Unsupported canary upload expression.' }
+        return & ([scriptblock]::Create($expression))
+    }
 }
 
 Describe 'Reusable <flow> workflow contracts' -ForEach @(
@@ -459,7 +475,7 @@ Describe 'Historical backfill graph behavior' {
     }
 }
 
-Describe 'Same-runner backfill canary wiring in <file>' -ForEach @(
+Describe 'Canary workflow wiring in <file>' -ForEach @(
     @{ file = 'test'; jobName = 'path-smoke' }
     @{ file = 'install-tools'; jobName = 'published' }
 ) {
@@ -497,6 +513,115 @@ Describe 'Same-runner backfill canary wiring in <file>' -ForEach @(
         foreach ($skipped in @($true, $false)) {
             $condition = $canarySteps.backfill.if.Replace('steps.collect.outputs.skipped', 'needs.prepare.outputs.skipped')
             Test-SelectionCondition $condition $skipped $false $false | Should -Be (-not $skipped)
+        }
+    }
+
+    Context 'Bounded report upload retries' {
+        BeforeAll {
+            $script:upload = $canarySteps['upload-reports']
+            $script:retry = $canarySteps['upload-reports-retry']
+            $script:requireUpload = $canarySteps['require-report-upload']
+        }
+
+        It 'retries only the official uploader with distinct names and identical report paths' {
+            $uploads = @($canaryJob.steps | Where-Object { $_['uses'] -like 'actions/upload-artifact@*' })
+            @($uploads.id) | Should -Be @('upload-reports', 'upload-reports-retry')
+            $retry.uses | Should -BeExactly $upload.uses
+            $retry.with.name | Should -BeExactly "$($upload.with.name)-retry"
+            $retry.with.path | Should -BeExactly $upload.with.path
+            foreach ($attempt in $uploads) {
+                $attempt.with['if-no-files-found'] | Should -BeExactly 'error'
+                $attempt.with.ContainsKey('overwrite') | Should -BeFalse
+                @($attempt.with.path.Trim() -split '\r?\n') | Should -Be @(
+                    '${{ steps.analyze.outputs.report-markdown }}'
+                    '${{ steps.analyze.outputs.report-json }}'
+                    '${{ steps.analyze.outputs.report-summary }}'
+                )
+            }
+        }
+
+        It 'permits recovery only for the initial upload without suppressing other failures' {
+            $canaryJob.ContainsKey('continue-on-error') | Should -BeFalse
+            $upload['continue-on-error'] | Should -BeTrue
+            foreach ($step in $canaryJob.steps) {
+                if ($step['id'] -ceq $upload.id) { continue }
+                $step.ContainsKey('continue-on-error') | Should -BeFalse
+            }
+            $ids = @($canaryJob.steps | ForEach-Object { $_['id'] })
+            [array]::IndexOf($ids, $retry.id) | Should -BeGreaterThan ([array]::IndexOf($ids, $upload.id))
+            [array]::IndexOf($ids, $requireUpload.id) | Should -BeGreaterThan ([array]::IndexOf($ids, $retry.id))
+        }
+
+        It 'preserves analysis, policy-skip and cancellation guards through both attempts and the assertion' {
+            foreach ($step in @($upload, $retry, $requireUpload)) {
+                # An explicit status function prevents GitHub's implicit success()
+                # from hiding the diagnostic upload after report assertions fail.
+                $step.if | Should -Match '!cancelled\(\)'
+            }
+            foreach ($cancelled in @($false, $true)) {
+                foreach ($analysisOutcome in @('success', 'failure', 'skipped', 'cancelled')) {
+                    foreach ($skipped in @('', 'false', 'true')) {
+                        foreach ($uploadOutcome in @('success', 'failure', 'skipped', 'cancelled')) {
+                            $eligible = -not $cancelled -and $analysisOutcome -eq 'success' -and $skipped -ne 'true'
+                            Test-CanaryUploadCondition $upload.if $cancelled $analysisOutcome $skipped $uploadOutcome |
+                                Should -Be $eligible
+                            Test-CanaryUploadCondition $requireUpload.if $cancelled $analysisOutcome $skipped $uploadOutcome |
+                                Should -Be $eligible
+                            Test-CanaryUploadCondition $retry.if $cancelled $analysisOutcome $skipped $uploadOutcome |
+                                Should -Be ($eligible -and $uploadOutcome -eq 'failure')
+                        }
+                    }
+                }
+            }
+        }
+
+        Context 'Required upload outcome' {
+            BeforeEach {
+                $script:savedUploadEnvironment = @{}
+                foreach ($key in $requireUpload.env.Keys) {
+                    $savedUploadEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
+                }
+            }
+
+            AfterEach {
+                foreach ($key in $savedUploadEnvironment.Keys) {
+                    [Environment]::SetEnvironmentVariable($key, $savedUploadEnvironment[$key])
+                }
+            }
+
+            It 'checks actual outcomes for <initial> then <retried>' -TestCases @(
+                @{ initial = 'success'; retried = 'skipped'; accepted = $true; recovered = $false }
+                @{ initial = 'failure'; retried = 'success'; accepted = $true; recovered = $true }
+                @{ initial = 'failure'; retried = 'failure'; accepted = $false; recovered = $false }
+                @{ initial = 'failure'; retried = 'skipped'; accepted = $false; recovered = $false }
+                @{ initial = 'failure'; retried = 'cancelled'; accepted = $false; recovered = $false }
+                @{ initial = 'skipped'; retried = 'skipped'; accepted = $false; recovered = $false }
+                @{ initial = ''; retried = ''; accepted = $false; recovered = $false }
+            ) {
+                param($initial, $retried, $accepted, $recovered)
+                $values = @{
+                    steps = @{
+                        'upload-reports' = @{ outcome = $initial; conclusion = 'success' }
+                        'upload-reports-retry' = @{ outcome = $retried; conclusion = $retried }
+                    }
+                }
+                foreach ($key in $requireUpload.env.Keys) {
+                    [Environment]::SetEnvironmentVariable($key, (Expand-ContractValue $requireUpload.env[$key] $values))
+                }
+                $requireUpload.shell | Should -BeExactly 'pwsh'
+                $assertion = [scriptblock]::Create($requireUpload.run)
+                if ($accepted) {
+                    $messages = @(& $assertion)
+                    if ($recovered) {
+                        $messages | Should -HaveCount 1
+                        $messages[0] | Should -BeLike '::warning::*recovered on retry*'
+                    } else {
+                        $messages | Should -HaveCount 0
+                    }
+                } else {
+                    { & $assertion } | Should -Throw '*Report upload did not succeed*'
+                }
+            }
         }
     }
 }
