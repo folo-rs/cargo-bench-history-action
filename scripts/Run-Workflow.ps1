@@ -26,7 +26,7 @@ if ($Stage -eq 'layout') {
         -Config $inputs['config'] -SourcePath $inputs['source-path'] -Base $inputs['base'] -Instance $inputs['instance']
     $context | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $context['state-path'] -Encoding utf8
     foreach ($key in @('state-path', 'scripts-path', 'checkout-path', 'working-directory', 'config',
-            'source-path', 'receipt-file', 'receipts-directory', 'machine-key-directory', 'cache-directory')) {
+            'source-path', 'receipt-file', 'receipts-directory', 'cache-directory')) {
         Add-WorkflowOutput $key $context[$key]
     }
     return
@@ -61,7 +61,7 @@ switch ($Stage) {
         $parameters.Instance = $env:CBH_INSTANCE
         $parameters.Head = $env:CBH_HEAD
         $parameters.Platform = $env:CBH_PLATFORM
-        $parameters.MachineKey = $env:CBH_MACHINE_KEY
+        $parameters.CollectionFile = $env:CBH_COLLECTION_FILE
     }
     'reconcile' {
         $parameters.Instance = $env:CBH_INSTANCE

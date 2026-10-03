@@ -31,6 +31,29 @@ Describe 'Honest fork policy evidence' {
 
     It 'rejects success-shaped benchmark outputs accompanying a skip' {
         { Assert-CanaryForkSkip $forkEvent $skipped @{ skipped = 'true'; outcome = 'clean' } } | Should -Throw
+        { Assert-CanaryForkSkip $forkEvent @{ skipped = 'true'; 'collection-file' = 'collection.json' } $skipped } | Should -Throw
+    }
+}
+
+Describe 'Exact collection snapshot transport' {
+    It 'copies the emitted bytes into the selected platform tree without interpreting them' {
+        $source = Join-Path $TestDrive "source with 'quotes'.json"
+        $selected = Join-Path $TestDrive "selected-$([guid]::NewGuid())"
+        # Payload interpretation belongs to the companion, not this copy operation.
+        Set-Content -LiteralPath $source -Value 'opaque collection payload' -NoNewline
+        Copy-CanaryCollection $source $selected
+        $files = @(Get-ChildItem -LiteralPath $selected -File -Recurse)
+        $files.Count | Should -Be 1
+        $files[0].FullName | Should -BeExactly (Join-Path $selected 'canary\collection.json')
+        (Get-FileHash $source).Hash | Should -BeExactly (Get-FileHash $files[0].FullName).Hash
+    }
+
+    It 'rejects absent evidence instead of creating an empty selected directory' -ForEach @(
+        @{ file = '' }, @{ file = 'missing.json' }
+    ) {
+        $selected = Join-Path $TestDrive "selected-$([guid]::NewGuid())"
+        { Copy-CanaryCollection $file $selected } | Should -Throw
+        Test-Path -LiteralPath $selected | Should -BeFalse
     }
 }
 

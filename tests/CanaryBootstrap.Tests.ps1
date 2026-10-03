@@ -25,9 +25,11 @@ $global:LASTEXITCODE = 0
         $script:oldEnvironment = $env:GITHUB_ENV
         $script:oldFaker = $env:CBH_FIXTURE_FAKER
         $script:oldMethod = $env:CBH_FIXTURE_METHOD
+        $script:oldDates = $env:CBH_FIXTURE_COMMIT_DATES
         $env:GITHUB_OUTPUT = Join-Path $TestDrive 'outputs'
         $env:GITHUB_ENV = Join-Path $TestDrive 'environment'
         $env:CBH_FIXTURE_FAKER = $script:faker
+        $env:CBH_FIXTURE_COMMIT_DATES = Join-Path $TestDrive "commit-dates-$([guid]::NewGuid()).txt"
         Mock Import-Module {}
         Mock Read-ActionManifest {
             @{ tools = @(
@@ -39,7 +41,12 @@ $global:LASTEXITCODE = 0
         Mock Install-ActionTools {}
         Mock Get-ActionToolPath { $env:CBH_FIXTURE_FAKER }
         Mock cargo { $global:LASTEXITCODE = 0 }
-        Mock git { $global:LASTEXITCODE = 0 }
+        Mock git {
+            $global:LASTEXITCODE = 0
+            if ('commit' -cin $args) {
+                "$env:GIT_AUTHOR_DATE|$env:GIT_COMMITTER_DATE" | Add-Content -LiteralPath $env:CBH_FIXTURE_COMMIT_DATES
+            }
+        }
     }
 
     AfterEach {
@@ -47,6 +54,7 @@ $global:LASTEXITCODE = 0
         $env:GITHUB_ENV = $script:oldEnvironment
         $env:CBH_FIXTURE_FAKER = $script:oldFaker
         $env:CBH_FIXTURE_METHOD = $script:oldMethod
+        $env:CBH_FIXTURE_COMMIT_DATES = $script:oldDates
     }
 
     It 'selects only the actual fixture producer with <method>' -ForEach @(
@@ -64,6 +72,10 @@ $global:LASTEXITCODE = 0
         $environment | Should -Contain "ACTION_CANARY_FAKER=$script:faker"
         Should -Invoke git -Times 2 -Exactly -ParameterFilter { 'commit' -cin $args }
         Should -Invoke git -Times 1 -Exactly -ParameterFilter { 'commit' -cin $args -and '--allow-empty' -cin $args }
+        $dates = @(Get-Content -LiteralPath $env:CBH_FIXTURE_COMMIT_DATES)
+        $dates.Count | Should -Be 2
+        $dates[0] | Should -BeExactly $dates[1]
+        $dates[0] | Should -Not -BeExactly '|'
     }
 
     It 'uses an existing gate installation without installing another tool' {
@@ -72,6 +84,12 @@ $global:LASTEXITCODE = 0
         Should -Invoke Get-ActionToolPath -Times 1 -Exactly -ParameterFilter {
             $Package -ceq 'faker' -and $Root -eq $TestDrive
         }
+    }
+
+    It 'sets an independent hosted project identity before collecting the fixture' {
+        & $initializer -Root $script:root -Method path -SourcePath $TestDrive -ProjectId action-canary-windows-latest
+        $configuration = Get-Content -LiteralPath (Join-Path $script:root 'workspace\.cargo\bench_history.toml')
+        $configuration | Should -Be @('[project]', 'id = "action-canary-windows-latest"')
     }
 
     It 'rejects missing fixture producers before calling the installer' {

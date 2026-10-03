@@ -80,6 +80,18 @@ issue need exist until findings appear. Clean updates leave an existing issue op
 inconclusive evidence cannot clear findings. Execution failures remain failures,
 including when surviving platforms produce a useful qualified report.
 
+Reports use only the exact measurements collected by this workflow's selected jobs
+as current data. The latest executed job for each platform supersedes its earlier
+executions; a failed retry cannot reuse an older success, while an untouched
+successful platform remains eligible. Comparable stored history supplies baselines,
+not additional current observations or series.
+
+Collection preserves existing stored measurements with `on-existing: skip`, while
+its snapshot retains the freshly measured values from the selected execution.
+A separate store-based analysis of the same commit can therefore differ from the
+workflow report. Later writes to storage do not change the report's selected
+current measurements.
+
 ### Workflow configuration
 
 All reusable workflows require the Azure identifiers as strings. Backfill requires
@@ -309,17 +321,19 @@ jobs:
           command: collect
           local-path: ${{ runner.temp }}/measurement-history
           on-existing: skip
-      - name: Prepare analysis machine keys
-        id: keys
+          collection-snapshot: 'true'
+      - name: Select this collection for analysis
+        id: collection
         shell: pwsh
         env:
-          CBH_MACHINE_KEY: ${{ steps.collect.outputs.machine-key }}
+          CBH_COLLECTION_FILE: ${{ steps.collect.outputs.collection-file }}
         run: |
-          # Pass this successful collection's key through the directory-based analysis contract.
-          $directory = Join-Path $env:RUNNER_TEMP "collected-keys-$([guid]::NewGuid().ToString('N'))"
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:CBH_COLLECTION_FILE)) { throw 'Collection emitted no snapshot.' }
+          $directory = Join-Path $env:RUNNER_TEMP "current-collections-$([guid]::NewGuid().ToString('N'))"
           $platformDirectory = Join-Path $directory 'ubuntu-latest'
           New-Item -ItemType Directory -Path $platformDirectory | Out-Null
-          $env:CBH_MACHINE_KEY | Set-Content -LiteralPath (Join-Path $platformDirectory 'machine-key.txt')
+          Copy-Item -LiteralPath $env:CBH_COLLECTION_FILE -Destination (Join-Path $platformDirectory 'collection.json')
           "directory=$directory" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
       - uses: folo-rs/cargo-bench-history-action@v2
         id: analyze
@@ -327,7 +341,7 @@ jobs:
           command: analyze-history
           local-path: ${{ runner.temp }}/measurement-history
           context: ${{ github.sha }}
-          machine-keys: ${{ steps.keys.outputs.directory }}
+          current-collections: ${{ steps.collection.outputs.directory }}
           expected-platforms: ubuntu-latest
           completed-platforms: ubuntu-latest
       - uses: actions/upload-artifact@v4
@@ -344,11 +358,17 @@ jobs:
 Local storage is not shared between jobs unless the caller restores/downloads it.
 A platform matrix must aggregate successful collection evidence before a separate
 analysis job. Pass the intended platform names as `expected-platforms`, only
-confirmed successful platform names as `completed-platforms`, and a directory
-containing the selected `<platform>/machine-key.txt` files as `machine-keys`.
-The runtime reads those files recursively; this input is a directory, not an
-inline fingerprint or CSV. Each file contains the `machine-key` output from that
-platform's successful collection. Machine keys are not proof of collection.
+confirmed successful platform names as `completed-platforms`, and the selected
+`<platform>/collection.json` snapshots as `current-collections`. The directory must
+contain only selected snapshot files, not downloaded receipts or unrelated files.
+Custom job graphs own retry selection and must not retain a prior successful
+snapshot for a platform whose latest executed job failed. The reusable workflows
+provide that reconciliation and artifact transport.
+
+For independent analysis of stored data, use `machine-keys` instead: a directory
+of selected `<platform>/machine-key.txt` files containing hardware fingerprints.
+This mode analyzes matching storage partitions and is not scoped to a collection
+execution. `machine-keys` and `current-collections` cannot be combined.
 
 Publication is a separate step after upload. For example, history findings can be
 published with the following step in a job granted `issues: write`:
@@ -393,6 +413,13 @@ The root metadata in [action.yml](action.yml) describes every input.
 For `command: backfill`, optional `max-commits` has the same attempted-commit
 semantics as the reusable backfill workflow. Leave it empty for unlimited work.
 
+For `command: collect`, `collection-snapshot: 'true'` enables the `collection-file`
+output. It defaults to false in the runtime and is independent of `on-existing`.
+Use the snapshot for a subsequent collect-and-analyze report, including when
+existing stored history is preserved. Analysis selects these files with
+`current-collections`; an aggregate without any current benchmark subjects cannot
+produce a report.
+
 `working-directory` defaults to the caller's current directory. It selects the
 measured/configuration checkout, not the tool's source checkout. In source mode:
 
@@ -434,7 +461,7 @@ independent executable-reported version. If installation fails, the action fails
 it cannot guarantee a GitHub alert when the companion itself is unavailable.
 
 Outputs are available only where meaningful for the selected command:
-`instance`, `skipped`, `machine-key`, `outcome`, `notable`,
+`instance`, `skipped`, `machine-key`, `collection-file`, `outcome`, `notable`,
 `partial-platform-coverage`, `regressions`, `report-markdown`, `report-json`,
 `report-summary`, `publication-state` and `can-clear`. Report outputs are paths;
 callers upload those files. Findings are advisory; execution errors fail the step.
