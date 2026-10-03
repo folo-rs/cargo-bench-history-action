@@ -35,6 +35,21 @@ The output file is the current step's `GITHUB_OUTPUT`. The temporary root is out
 the measured checkout. Publication uses the normal ambient GitHub repository/run
 context where an explicit execution-data input is absent.
 
+Root collection accepts the optional boolean string `collection-snapshot`, with a
+runtime default of false. When enabled, Rust allocates an external snapshot path,
+passes `--collection-output` to the core and emits the absolute `collection-file`
+output after successful execution and persistence handling. The versioned snapshot
+contains the exact per-engine runs, including when `on-existing: skip` preserves
+an existing stored object. The companion derives its machine key from that snapshot.
+PowerShell does not interpret the snapshot or compose measurement data.
+
+Root analysis accepts `current-collections`, a directory containing selected
+`<platform>/collection.json` files, instead of `machine-keys`. The companion validates
+and forwards the snapshots through core `--current-collection` arguments. Scoped
+current observations bypass stored and cached values for the analyzed context;
+normal matching history remains available for baselines. Omitting scoped inputs
+preserves the independent store-analysis interface.
+
 `max-commits` is an optional backfill-only runtime string. The reusable workflow
 and root action default it to `''`; the JSON handoff preserves that empty string
 for unlimited replay and preserves supplied values without numeric conversion.
@@ -196,10 +211,19 @@ through the root action and controls only its per-commit failure policy.
 The hosted timeout remains an exceptional watchdog whose cancellation is visible,
 not a normal completion mechanism.
 
-Collection records a receipt only after the root command and actual key capture
-succeed. Artifacts include project, flow, platform and attempt; downloads use the
+Collection records a receipt only after the root command supplies its snapshot.
+The adapter passes that file to `collection-receipt --collection-file`; the
+companion validates it and embeds its version-1 payload in a version-2 receipt.
+One self-contained `receipt.json` is uploaded, without a second payload path or a
+shared-store reference. Artifacts include project, flow, platform and attempt; downloads use the
 authenticated run-wide view. Rust accepts the downloader's flat single-receipt and
 per-artifact-directory layouts, enforcing the same identity/latest-job checks for both.
+Legacy receipts do not establish scoped collection evidence. `prepare-analysis`
+receives `--current-collection-dir`, writes only the selected
+`<platform>/collection.json` files and emits `current-collections`. The adapter
+requires that output to identify its requested destination before root analysis
+receives it. Receipt selection, empty-collection handling, payload validation and
+duplicate current-identity rejection remain Rust-owned.
 The analysis cache has a stable instance-scoped path outside both checkouts. History
 can save read-cache updates; PR analysis only restores them.
 

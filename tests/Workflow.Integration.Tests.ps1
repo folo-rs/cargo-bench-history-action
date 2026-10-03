@@ -50,6 +50,7 @@ Describe 'Workflow native handoff' {
         foreach ($name in @('GITHUB_WORKSPACE', 'GITHUB_REPOSITORY', 'RUNNER_TEMP', 'GITHUB_OUTPUT',
                 'CBH_WORKFLOW_INPUTS', 'CBH_WORKFLOW_STATE', 'CBH_FLOW', 'CBH_PLATFORMS',
                 'CBH_EXCLUDE', 'CBH_FROM', 'CBH_TO', 'CBH_LOOKBACK', 'CBH_MINIMUM_AGE',
+                'CBH_INSTANCE', 'CBH_HEAD', 'CBH_PLATFORM', 'CBH_COLLECTION_FILE',
                 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')) {
             $script:environment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
@@ -92,6 +93,22 @@ Describe 'Workflow native handoff' {
         $env:CBH_WORKFLOW_INPUTS = '{"install-method":"none"}'
         { & $entry -Stage layout } | Should -Throw
         Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -BeFalse
+    }
+
+    It 'forwards the collection snapshot path from the actual receipt entry point' {
+        $env:CBH_INSTANCE = 'project'
+        $env:CBH_HEAD = 'frozen-head'
+        $env:CBH_PLATFORM = 'ubuntu-latest'
+        $env:CBH_COLLECTION_FILE = Join-Path $temporary "snapshot with 'quotes'.json"
+        $env:CBH_WORKFLOW_STATE = Join-Path $temporary 'state.json'
+        '{"companion":"fixture"}' | Set-Content $env:CBH_WORKFLOW_STATE
+        Mock Invoke-WorkflowOperation {}
+        & $entry -Stage receipt
+        Should -Invoke Invoke-WorkflowOperation -Times 1 -Exactly -ParameterFilter {
+            $Operation -ceq 'receipt' -and $Instance -ceq $env:CBH_INSTANCE -and
+            $Head -ceq $env:CBH_HEAD -and $Platform -ceq $env:CBH_PLATFORM -and
+            $CollectionFile -ceq $env:CBH_COLLECTION_FILE
+        }
     }
 
     It 'passes range environment values only to the backfill preparation entry point' -ForEach @(

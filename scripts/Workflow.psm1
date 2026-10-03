@@ -83,8 +83,7 @@ function Initialize-WorkflowContext {
         'state-path' = Join-Path $runRoot 'workflow.json'
         'receipt-file' = Join-Path $receiptDirectory 'receipt.json'
         'receipts-directory' = $receiptsDirectory
-        'machine-key-file' = Join-Path $runRoot 'machine-key.txt'
-        'machine-key-directory' = Join-Path $runRoot 'keys'
+        'current-collection-directory' = Join-Path $runRoot 'current-collections'
         'cache-directory' = $cacheDirectory
     }
 }
@@ -167,7 +166,7 @@ function Invoke-WorkflowOperation {
         [string] $Instance,
         [string] $Head,
         [string] $Platform,
-        [string] $MachineKey,
+        [string] $CollectionFile,
         [string] $RunId = $env:GITHUB_RUN_ID,
         [string] $RunAttempt = $env:GITHUB_RUN_ATTEMPT,
         [string] $OutputPath = $env:GITHUB_OUTPUT
@@ -194,36 +193,54 @@ function Invoke-WorkflowOperation {
                 '--github-output', $OutputPath)
         }
         'receipt' {
-            $MachineKey | Set-Content -LiteralPath $Context['machine-key-file'] -Encoding utf8 -NoNewline
+            if ([string]::IsNullOrWhiteSpace($CollectionFile) -or
+                -not (Test-Path -LiteralPath $CollectionFile -PathType Leaf)) {
+                throw 'Successful collection must supply its snapshot file before recording a receipt.'
+            }
             @('--instance', $Instance, 'collection-receipt', '--run-id', $RunId,
                 '--run-attempt', $RunAttempt, '--head', $Head, '--platform', $Platform,
-                '--machine-key-file', $Context['machine-key-file'], '--file', $Context['receipt-file'])
+                '--collection-file', $CollectionFile, '--file', $Context['receipt-file'])
         }
         'reconcile' {
             @('--instance', $Instance, '--verbose', 'prepare-analysis', '--run-id', $RunId,
                 '--head', $Head, '--expected-platforms', $Platforms,
                 '--receipts-dir', $Context['receipts-directory'],
-                '--machine-key-dir', $Context['machine-key-directory'], '--github-output', $OutputPath)
+                '--current-collection-dir', $Context['current-collection-directory'], '--github-output', $OutputPath)
         }
     }
     Invoke-WorkflowProcess -FilePath $Context['companion'] -Arguments $arguments
     if ($Operation -eq 'prepare') {
         Assert-WorkflowPreparationOutput -Path $OutputPath -Flow $Flow
     }
+    elseif ($Operation -eq 'reconcile') {
+        $outputs = Read-WorkflowOutput -Path $OutputPath
+        # Missing optional analysis input must not select independent store analysis.
+        # Ref: docs/implementation.md, "Reusable workflow orchestration".
+        if (-not $outputs.ContainsKey('current-collections') -or
+            $outputs['current-collections'] -cne $Context['current-collection-directory']) {
+            throw 'Reconciliation did not emit its selected current-collections directory.'
+        }
+    }
+}
+
+function Read-WorkflowOutput {
+    param([string] $Path)
+    $outputs = @{}
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if (-not $line) { continue }
+        if ($line -cnotmatch '^([a-z][a-z0-9-]*)=(.*)$' -or $outputs.ContainsKey($Matches[1])) {
+            throw 'Malformed or duplicate workflow output.'
+        }
+        $outputs[$Matches[1]] = $Matches[2]
+    }
+    return $outputs
 }
 
 function Assert-WorkflowPreparationOutput {
     param([string] $Path, [string] $Flow)
     # Validate the machine-readable handoff, not the Rust scope decision. Missing
     # output must fail preparation rather than silently skip every dependent job.
-    $outputs = @{}
-    foreach ($line in Get-Content -LiteralPath $Path) {
-        if (-not $line) { continue }
-        if ($line -cnotmatch '^([a-z][a-z0-9-]*)=(.*)$' -or $outputs.ContainsKey($Matches[1])) {
-            throw 'Malformed or duplicate workflow preparation output.'
-        }
-        $outputs[$Matches[1]] = $Matches[2]
-    }
+    $outputs = Read-WorkflowOutput -Path $Path
     $commonKeys = @('instance', 'matrix', 'expected-platforms')
     foreach ($key in $commonKeys) {
         if (-not $outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($outputs[$key])) {

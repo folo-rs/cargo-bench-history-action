@@ -265,6 +265,72 @@ Describe 'Reusable <flow> workflow contracts' -ForEach @(
     }
 }
 
+Describe 'Scoped <flow> collection handoff' -ForEach @(
+    @{ flow = 'history'; prefix = 'bench-history' }
+    @{ flow = 'pr'; prefix = 'pr-bench-history' }
+) {
+    BeforeAll {
+        $script:scopedWorkflow = Get-Content (Join-Path $root ".github\workflows\$flow.yml") -Raw | ConvertFrom-Yaml
+        $script:collectionJob = $scopedWorkflow.jobs.collect
+        $script:analysisJob = $scopedWorkflow.jobs.analyze
+        $script:collector = @($collectionJob.steps | Where-Object { $_['id'] -ceq 'collect' })[0]
+    }
+
+    It 'selects fresh execution snapshots without replacing already-stored history' {
+        $collector.with['collection-snapshot'] | Should -BeExactly 'true'
+        $collector.with['on-existing'] | Should -BeExactly 'skip'
+        $rootAction.inputs.ContainsKey('collection-snapshot') | Should -BeTrue
+        $rootAction.outputs['collection-file'].value | Should -BeExactly '${{ steps.invoke.outputs.collection-file }}'
+        $collectionJob.name | Should -BeExactly '${{ needs.prepare.outputs.collection-job-prefix }}:${{ matrix.platform }}'
+        $collectionJob.strategy['fail-fast'] | Should -BeFalse
+    }
+
+    It 'passes the snapshot to receipt creation before uploading one self-contained file' {
+        $receipt = @($collectionJob.steps | Where-Object { $_['env'] -and $_.env.ContainsKey('CBH_COLLECTION_FILE') })
+        $receipt.Count | Should -Be 1
+        $receipt[0].env.CBH_COLLECTION_FILE | Should -BeExactly '${{ steps.collect.outputs.collection-file }}'
+        $receipt[0].env.ContainsKey('CBH_MACHINE_KEY') | Should -BeFalse
+        $receipt[0].ContainsKey('continue-on-error') | Should -BeFalse
+        $uploads = @($collectionJob.steps | Where-Object { $_['uses'] -like 'actions/upload-artifact@*' })
+        $uploads.Count | Should -Be 1
+        $uploads[0].with.path | Should -BeExactly '${{ steps.context.outputs.receipt-file }}'
+        $uploads[0].with['if-no-files-found'] | Should -BeExactly 'error'
+        $uploads[0].with.ContainsKey('overwrite') | Should -BeFalse
+        [array]::IndexOf($collectionJob.steps, $uploads[0]) |
+            Should -BeGreaterThan ([array]::IndexOf($collectionJob.steps, $receipt[0]))
+    }
+
+    It 'downloads all attempts for this flow from the authenticated run-wide view' {
+        $upload = @($collectionJob.steps | Where-Object { $_['uses'] -like 'actions/upload-artifact@*' })[0]
+        $download = @($analysisJob.steps | Where-Object { $_['uses'] -like 'actions/download-artifact@*' })[0]
+        $download.with.pattern | Should -BeExactly ("$prefix-collection-" + '${{ needs.prepare.outputs.instance }}-*')
+        $download.with['github-token'] | Should -BeExactly '${{ github.token }}'
+        $download.with['run-id'] | Should -BeExactly '${{ github.run_id }}'
+        $download.with.repository | Should -BeExactly '${{ github.repository }}'
+        $download.with.ContainsKey('merge-multiple') | Should -BeFalse
+        foreach ($attempt in @(1, 2)) {
+            $values = @{
+                needs = @{ prepare = @{ outputs = @{ instance = 'project' } } }
+                matrix = @{ platform = 'windows-latest' }
+                github = @{ run_attempt = $attempt }
+            }
+            $artifact = Expand-ContractValue $upload.with.name $values
+            $pattern = Expand-ContractValue $download.with.pattern $values
+            $artifact | Should -BeLike $pattern
+            "$prefix-collection-another-project-windows-latest-$attempt" | Should -Not -BeLike $pattern
+        }
+    }
+
+    It 'analyzes only reconciled snapshot output while retaining explicit platform coverage' {
+        $analysis = @($analysisJob.steps | Where-Object { $_['id'] -ceq 'analyze' })[0]
+        $analysis.with['current-collections'] | Should -BeExactly '${{ steps.collection.outputs.current-collections }}'
+        $analysis.with.ContainsKey('machine-keys') | Should -BeFalse
+        $analysis.with['expected-platforms'] | Should -BeExactly '${{ needs.prepare.outputs.expected-platforms }}'
+        $analysis.with['completed-platforms'] | Should -BeExactly '${{ steps.collection.outputs.completed-platforms }}'
+        $analysisJob.permissions['actions'] | Should -BeExactly 'read'
+    }
+}
+
 Describe 'Historical backfill graph behavior' {
     BeforeAll {
         $script:backfill = Get-Content (Join-Path $root '.github\workflows\backfill.yml') -Raw | ConvertFrom-Yaml

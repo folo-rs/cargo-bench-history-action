@@ -196,6 +196,36 @@ exit ([int] $env:CBH_FIXTURE_EXIT)
         $inputs.ContainsKey('max-commits') | Should -BeFalse
     }
 
+    It 'forwards scoped collection inputs unchanged for Rust validation (<command>, <value>)' -ForEach @(
+        @{ command = 'collect'; inputName = 'collection-snapshot'; value = 'true' }
+        @{ command = 'collect'; inputName = 'collection-snapshot'; value = 'false' }
+        @{ command = 'collect'; inputName = 'collection-snapshot'; value = '' }
+        @{ command = 'analyze-history'; inputName = 'collection-snapshot'; value = '' }
+        @{ command = 'analyze-history'; inputName = 'current-collections'; value = "selected with 'quotes'; `$literal" }
+        @{ command = 'analyze-pr'; inputName = 'current-collections'; value = 'selected' }
+        @{ command = 'backfill'; inputName = 'current-collections'; value = '' }
+    ) {
+        Invoke-Preparation @{ command = $command; $inputName = $value; 'on-existing' = 'skip' } | Out-Null
+        & $script:entryPoint -Stage install
+        $env:GITHUB_OUTPUT = Join-Path $TestDrive 'scoped-output'
+        & $script:entryPoint -Stage invoke
+        $captured = Get-Content -LiteralPath $env:CBH_FIXTURE_CAPTURE -Raw | ConvertFrom-Json -AsHashtable
+        $captured.inputs[$inputName] | Should -BeOfType ([string])
+        $captured.inputs[$inputName] | Should -BeExactly $value
+        $captured.inputs['on-existing'] | Should -BeExactly 'skip'
+    }
+
+    It 'does not opt independent collection or store analysis into snapshots' -ForEach @(
+        @{ command = 'collect' }, @{ command = 'analyze-history' }, @{ command = 'backfill' }
+    ) {
+        $outputs = Invoke-Preparation @{ command = $command; 'machine-keys' = 'selected-keys' }
+        $state = Get-Content -LiteralPath $outputs['state-path'] -Raw | ConvertFrom-Json -AsHashtable
+        $inputs = Get-Content -LiteralPath $state.inputPath -Raw | ConvertFrom-Json -AsHashtable
+        $inputs.ContainsKey('collection-snapshot') | Should -BeFalse
+        $inputs.ContainsKey('current-collections') | Should -BeFalse
+        $inputs['machine-keys'] | Should -BeExactly 'selected-keys'
+    }
+
     It 'forwards unknown empty keys into the runtime JSON for strict name validation' {
         Invoke-Preparation @{
             command = 'alert'

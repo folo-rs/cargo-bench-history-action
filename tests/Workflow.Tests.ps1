@@ -76,10 +76,11 @@ Describe 'Workflow adapter' {
                 $context['config'] | Should -Be (Join-Path $workspace '.cargo\bench_history.toml')
                 $context['working-directory'] | Should -Be (Join-Path $workspace '.bench-history\project')
                 $context['state-path'].StartsWith($temp, [StringComparison]::Ordinal) | Should -BeTrue
-                $context['receipt-file'] | Should -Not -Be $context['machine-key-file']
-                $context['receipts-directory'] | Should -Not -Be $context['machine-key-directory']
+                $context['receipts-directory'] | Should -Not -Be $context['current-collection-directory']
                 Test-Path -LiteralPath $context['receipts-directory'] | Should -BeTrue
-                Test-Path -LiteralPath $context['machine-key-directory'] | Should -BeFalse
+                Test-Path -LiteralPath $context['current-collection-directory'] | Should -BeFalse
+                $context.ContainsKey('machine-key-file') | Should -BeFalse
+                $context.ContainsKey('machine-key-directory') | Should -BeFalse
             }
 
             It 'allocates fresh tool roots without another installation metadata format' {
@@ -187,6 +188,14 @@ Describe 'Workflow adapter' {
                 $script:operationContext = Initialize-ContextFixture
                 $script:operationContext['companion'] = 'fixture-companion'
                 $script:operationOutput = Join-Path $script:temp 'step-output'
+                $script:collectionFile = Join-Path $script:temp "collection with 'quotes'.json"
+                # The adapter must forward the file without interpreting Rust's payload.
+                Set-Content -LiteralPath $script:collectionFile -Value 'opaque snapshot fixture'
+                Mock Invoke-WorkflowProcess {
+                    param($Arguments)
+                    $destination = $Arguments[([array]::IndexOf($Arguments, '--current-collection-dir') + 1)]
+                    "current-collections=$destination" | Set-Content -LiteralPath $Arguments[-1]
+                } -ParameterFilter { 'prepare-analysis' -cin $Arguments }
             }
 
             It 'passes preparation input as data and excludes installation-owned values' {
@@ -401,22 +410,37 @@ Describe 'Workflow adapter' {
                 { Assert-WorkflowPreparationOutput -Path $script:operationOutput -Flow backfill } | Should -Throw
             }
 
-            It 'binds a real key file to frozen collection identity without parsing reports' {
+            It 'binds the original snapshot file to frozen collection identity without parsing it' {
                 Invoke-WorkflowOperation receipt $script:operationContext -Instance project -Head head -Platform linux `
-                    -MachineKey 0123456789abcdef -RunId 42 -RunAttempt 3
-                Get-Content -LiteralPath $script:operationContext['machine-key-file'] -Raw | Should -BeExactly '0123456789abcdef'
+                    -CollectionFile $script:collectionFile -RunId 42 -RunAttempt 3
+                (Get-Content -LiteralPath $script:collectionFile -Raw).Trim() | Should -BeExactly 'opaque snapshot fixture'
                 Should -Invoke Invoke-WorkflowProcess -Times 1 -Exactly -ParameterFilter {
                     ($Arguments -join '|') -ceq (@('--instance', 'project', 'collection-receipt',
                             '--run-id', '42', '--run-attempt', '3', '--head', 'head', '--platform', 'linux',
-                            '--machine-key-file', $script:operationContext['machine-key-file'], '--file', $script:operationContext['receipt-file']) -join '|')
+                            '--collection-file', $script:collectionFile, '--file', $script:operationContext['receipt-file']) -join '|')
                 }
+            }
+
+            It 'fails collection evidence before upload when the snapshot is <kind>' -ForEach @(
+                @{ kind = 'empty' }, @{ kind = 'missing' }, @{ kind = 'a directory' }
+            ) {
+                $file = switch ($kind) {
+                    empty { '' }
+                    missing { Join-Path $script:temp 'absent.json' }
+                    default { $script:temp }
+                }
+                { Invoke-WorkflowOperation receipt $script:operationContext -Instance project -Head head `
+                        -Platform linux -CollectionFile $file -RunId 42 -RunAttempt 3 } |
+                    Should -Throw '*snapshot file*'
+                Should -Invoke Invoke-WorkflowProcess -Times 0
+                Test-Path -LiteralPath $script:operationContext['receipt-file'] | Should -BeFalse
             }
 
             It 'does not alias branches for <operation> even when flow is backfill' -ForEach @(
                 @{ operation = 'receipt' }, @{ operation = 'reconcile' }
             ) {
                 Invoke-WorkflowOperation $operation $script:operationContext -Flow backfill `
-                    -Instance project -Head head -Platform linux -MachineKey key -RunId 42 `
+                    -Instance project -Head head -Platform linux -CollectionFile $script:collectionFile -RunId 42 `
                     -OutputPath $script:operationOutput
                 Should -Invoke Invoke-WorkflowProcess -Times 0 -ParameterFilter { $FilePath -ceq 'git' }
             }
@@ -428,12 +452,30 @@ Describe 'Workflow adapter' {
                     ($Arguments -join '|') -ceq (@('--instance', 'project', '--verbose', 'prepare-analysis',
                             '--run-id', '42', '--head', 'head', '--expected-platforms', 'linux,windows',
                             '--receipts-dir', $script:operationContext['receipts-directory'],
-                            '--machine-key-dir', $script:operationContext['machine-key-directory'], '--github-output', $script:operationOutput) -join '|')
+                            '--current-collection-dir', $script:operationContext['current-collection-directory'], '--github-output', $script:operationOutput) -join '|')
                 }
             }
 
+            It 'rejects a missing or contradictory scoped reconciliation handoff (<kind>)' -ForEach @(
+                @{ kind = 'missing file' }, @{ kind = 'missing output' }, @{ kind = 'empty directory' }
+                @{ kind = 'different directory' }, @{ kind = 'duplicate output' }
+            ) {
+                Mock Invoke-WorkflowProcess {} -ParameterFilter { 'prepare-analysis' -cin $Arguments }
+                $destination = $script:operationContext['current-collection-directory']
+                switch ($kind) {
+                    'missing output' { Set-Content $script:operationOutput 'completed-platforms=linux' }
+                    'empty directory' { Set-Content $script:operationOutput 'current-collections=' }
+                    'different directory' { Set-Content $script:operationOutput "current-collections=$script:temp" }
+                    'duplicate output' {
+                        Set-Content $script:operationOutput @("current-collections=$destination", "current-collections=$destination")
+                    }
+                }
+                { Invoke-WorkflowOperation reconcile $script:operationContext -Instance project -Head head `
+                        -Platforms linux -RunId 42 -OutputPath $script:operationOutput } | Should -Throw
+            }
+
             It 'never turns a failed companion process into success' {
-                Mock Invoke-WorkflowProcess { throw 'companion failed' }
+                Mock Invoke-WorkflowProcess { throw 'companion failed' } -ParameterFilter { 'prepare-analysis' -cin $Arguments }
                 { Invoke-WorkflowOperation reconcile $script:operationContext -Instance project -Head head -Platforms linux -RunId 42 -OutputPath $script:operationOutput } |
                     Should -Throw
             }
