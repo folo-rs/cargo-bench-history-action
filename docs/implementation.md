@@ -315,7 +315,8 @@ Folo checkouts. The workspace is virtual: its benchmark belongs to a non-root me
 because the companion's package-ownership library excludes workspace-root packages. The root
 still owns the benchmark-history configuration. Its small benchmark entry point
 delegates to the manifest-pinned faker, producing deterministic engine output without
-wall-clock measurements.
+wall-clock measurements. Fixed Git dates keep fixture commit identities stable
+across workflow attempts; analysis explicitly includes that synthetic history.
 No canary posts issues or comments. The fixture has a working synthetic benchmark
 at both commits, with generated build output Git-ignored so historical worktrees
 store clean observations. Ordinary collection stores the tip, then the canary
@@ -331,7 +332,25 @@ the tip's original object hash. Repeating backfill with a valid but nonexistent
 benchmark target must succeed while every stored file and hash stays unchanged,
 proving resumption skips execution as well as writes. Analysis then requires
 parseable reports about the tip, a nonempty series census and an honest
-insufficient-baseline outcome for this short history.
+insufficient-baseline outcome for this short history. Published-method canaries
+copy the root action's exact `collection-file` bytes into the selected platform
+directory and analyze with `current-collections`, not machine-key selection.
+
+The source canary separates collection and analysis jobs so `prepare-analysis`
+can inspect real completed GitHub jobs. Each collection job uses the companion's
+canonical job marker, runs the normal backfill probe and records a self-contained
+receipt using its already-installed companion. Immutable receipt artifacts retain
+all platform attempts. Analysis downloads the authenticated run-wide receipts and
+uses the production workflow adapter to reconcile them before root-action analysis.
+Both jobs use the same pinned Folo source revision.
+
+A separate per-platform archive transports only the synthetic Git checkout, local
+baseline store and collection output metadata. That supporting fixture is replaced
+when its platform is rerun; untouched platforms retain theirs. It carries no
+installed binaries or build outputs and cannot replace the current values embedded
+in the selected receipt. This transport is canary-only: reusable workflows continue
+to read their configured shared history and upload only collection receipts.
+
 Fork-triggered canaries instead assert the root action's explicit fork skip for both
 commands and reject any claimed collection or report evidence. This never bypasses
 published availability: every exact registry/prebuilt installation, asset check and

@@ -22,9 +22,21 @@ function Assert-CanaryForkSkip {
         throw 'A same-repository PR must execute the behavioral canary.'
     }
     if ($Collection['skipped'] -cne 'true' -or $Analysis['skipped'] -cne 'true' -or
-        $Collection['machine-key'] -or $Analysis['outcome']) {
+        $Collection['machine-key'] -or $Collection['collection-file'] -or $Analysis['outcome']) {
         throw 'Fork canaries must explicitly skip both commands without claiming benchmark evidence.'
     }
+}
+
+function Copy-CanaryCollection {
+    param([string] $CollectionFile, [string] $Directory)
+    if ([string]::IsNullOrWhiteSpace($CollectionFile) -or
+        -not (Test-Path -LiteralPath $CollectionFile -PathType Leaf)) {
+        throw 'Collection did not emit its snapshot file.'
+    }
+    # Match the published-method canary's explicit platform coverage.
+    $platformDirectory = Join-Path $Directory 'canary'
+    $null = New-Item -ItemType Directory -Path $platformDirectory
+    Copy-Item -LiteralPath $CollectionFile -Destination (Join-Path $platformDirectory 'collection.json')
 }
 
 function Assert-CanaryAnalysis {
@@ -102,6 +114,9 @@ if ($MyInvocation.InvocationName -ne '.') {
         Assert-CanaryForkSkip $workflowEvent $collection $outputs
         Write-Information 'Verified explicit fork policy: no collection/report evidence is claimed. Published availability is checked independently before these invocations.' -InformationAction Continue
         return
+    }
+    if ([string]::IsNullOrWhiteSpace($collection['collection-file'])) {
+        throw 'Collection did not report its exact snapshot.'
     }
     foreach ($name in @('report-json', 'report-markdown', 'report-summary')) {
         if (-not $outputs.Contains($name) -or -not (Test-Path -LiteralPath $outputs[$name] -PathType Leaf) -or

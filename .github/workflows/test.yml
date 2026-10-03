@@ -76,8 +76,10 @@ jobs:
             -EventData $workflowEvent -Ref $env:GITHUB_REF
           & .\scripts\Publish-Release.ps1 -CheckOnly -BaseRef $base
 
-  path-smoke:
-    name: Source path (${{ matrix.runner }})
+  path-collect:
+    # This instance matches tests/fixture/.cargo/bench_history.toml; the receipt
+    # step verifies it against the companion's canonical output.
+    name: cbh-collect:action-canary:${{ matrix.runner }}
     needs: setup
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -119,6 +121,8 @@ jobs:
           working-directory: ${{ steps.fixture.outputs.workspace }}
           local-path: ${{ steps.fixture.outputs.store }}
           bench: synthetic
+          collection-snapshot: 'true'
+          on-existing: skip
       - name: Backfill and resume on the collection runner
         id: backfill
         if: steps.collect.outputs.skipped != 'true'
@@ -126,13 +130,153 @@ jobs:
         env:
           CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
           CANARY_STORE: ${{ steps.fixture.outputs.store }}
-          CANARY_KEYS: ${{ steps.fixture.outputs.machine-keys }}
           CANARY_KEY: ${{ steps.collect.outputs.machine-key }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:CANARY_KEY)) { throw 'Collection emitted no machine key.' }
           & .\tests\Invoke-BackfillCanary.ps1 -Workspace $env:CANARY_WORKSPACE `
             -Store $env:CANARY_STORE -MachineKey $env:CANARY_KEY
-          Set-Content -LiteralPath (Join-Path $env:CANARY_KEYS 'machine-key.txt') -Value $env:CANARY_KEY
+      - name: Record the exact collection and preserve its local baseline fixture
+        id: evidence
+        shell: pwsh
+        env:
+          CANARY_ROOT: ${{ steps.fixture.outputs.root }}
+          CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
+          CANARY_PLATFORM: ${{ matrix.runner }}
+          CANARY_COLLECTION: ${{ toJSON(steps.collect.outputs) }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\tests\Invoke-BackfillCanary.ps1
+          Import-Module .\scripts\Workflow.psm1
+          $collection = $env:CANARY_COLLECTION | ConvertFrom-Json -AsHashtable
+          $head = & git -C $env:CANARY_WORKSPACE rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot identify the collected fixture head.' }
+          $receipt = Join-Path $env:CANARY_ROOT 'receipt.json'
+          if ($collection['skipped'] -cne 'true') {
+            if ($collection['instance'] -cne 'action-canary') { throw 'Canary job marker disagrees with the canonical project.' }
+            $companion = Get-CanaryCollectionTool -Workspace $env:CANARY_WORKSPACE -TemporaryDirectory $env:RUNNER_TEMP -Role companion
+            $context = @{ companion = $companion; 'receipt-file' = $receipt }
+            Invoke-WorkflowOperation receipt $context -Instance $collection['instance'] -Head $head `
+              -Platform $env:CANARY_PLATFORM -CollectionFile $collection['collection-file']
+          } else {
+            New-Item -ItemType Directory -Path (Join-Path $env:CANARY_ROOT 'store') -Force | Out-Null
+          }
+          @{ head = $head; collection = $collection } | ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath (Join-Path $env:CANARY_ROOT 'metadata.json')
+          $archive = Join-Path $env:CANARY_ROOT 'fixture.tar'
+          # Preserve the fixture Git directory without transporting installations or build outputs.
+          $arguments = @('-cf', $archive, '-C', $env:CANARY_ROOT, 'workspace', 'store', 'metadata.json')
+          & tar @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot archive the source canary fixture.' }
+          "receipt=$receipt" >> $env:GITHUB_OUTPUT
+          "fixture=$archive" >> $env:GITHUB_OUTPUT
+      - name: Upload immutable collection-attempt evidence
+        if: steps.collect.outputs.skipped != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: canary-source-receipt-${{ matrix.rust_target }}-${{ github.run_attempt }}
+          path: ${{ steps.evidence.outputs.receipt }}
+          if-no-files-found: error
+      - name: Upload the portable baseline fixture
+        uses: actions/upload-artifact@v7
+        with:
+          # Only the supporting fixture is replaceable on a retry. Collection
+          # receipts retain every attempt and remain the current-data authority.
+          name: canary-source-fixture-${{ matrix.rust_target }}
+          overwrite: true
+          path: ${{ steps.evidence.outputs.fixture }}
+          if-no-files-found: error
+
+  path-smoke:
+    name: Source path (${{ matrix.runner }})
+    needs: [setup, path-collect]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    env:
+      CBH_ACTION_DISABLE_CACHE: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Checkout exact canary source
+        uses: actions/checkout@v7
+        with:
+          repository: folo-rs/folo
+          ref: ${{ needs.setup.outputs.source }}
+          path: Folo
+          persist-credentials: false
+      # Match the collection compiler channel and reviewed bootstrap implementation.
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: stable
+      - name: Download the selected platform's portable fixture
+        uses: actions/download-artifact@v8
+        with:
+          name: canary-source-fixture-${{ matrix.rust_target }}
+          path: ${{ runner.temp }}/source-canary
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+      - name: Restore the measured checkout and baseline store
+        id: fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'source-canary'
+          $arguments = @('-xf', (Join-Path $root 'fixture.tar'), '-C', $root)
+          & tar @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot restore the source canary fixture.' }
+          $metadata = Get-Content -LiteralPath (Join-Path $root 'metadata.json') -Raw | ConvertFrom-Json -AsHashtable
+          $workspace = Join-Path $root 'workspace'
+          $head = & git -C $workspace rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $head -cne $metadata.head) { throw 'Restored fixture head disagrees with its collection.' }
+          "source=$(Join-Path $env:GITHUB_WORKSPACE 'Folo')" >> $env:GITHUB_OUTPUT
+          "root=$root" >> $env:GITHUB_OUTPUT
+          "workspace=$workspace" >> $env:GITHUB_OUTPUT
+          "store=$(Join-Path $root 'store')" >> $env:GITHUB_OUTPUT
+          "head=$head" >> $env:GITHUB_OUTPUT
+          "skipped=$($metadata.collection['skipped'])" >> $env:GITHUB_OUTPUT
+          "machine-key=$($metadata.collection['machine-key'])" >> $env:GITHUB_OUTPUT
+          "collection-json=$($metadata.collection | ConvertTo-Json -Compress)" >> $env:GITHUB_OUTPUT
+      - name: Download every collection attempt for this platform
+        if: steps.fixture.outputs.skipped != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: canary-source-receipt-${{ matrix.rust_target }}-*
+          path: ${{ steps.fixture.outputs.root }}/receipts
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+      - name: Reconcile actual completed collection jobs
+        id: collection
+        if: steps.fixture.outputs.skipped != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANARY_ROOT: ${{ steps.fixture.outputs.root }}
+          CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
+          CANARY_SOURCE: ${{ steps.fixture.outputs.source }}
+          CANARY_HEAD: ${{ steps.fixture.outputs.head }}
+          CANARY_PLATFORM: ${{ matrix.runner }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module .\scripts\Workflow.psm1
+          Import-Module .\scripts\Tools.psm1
+          $context = @{
+            'working-directory' = $env:CANARY_WORKSPACE
+            'install-method' = 'path'; 'source-path' = $env:CANARY_SOURCE; base = ''
+            'tools-root' = Join-Path $env:CANARY_ROOT 'workflow-tools'
+            'receipts-directory' = Join-Path $env:CANARY_ROOT 'receipts'
+            'current-collection-directory' = Join-Path $env:CANARY_ROOT 'current-collections'
+          }
+          $tools = Install-WorkflowTool $context (Read-ActionManifest .\release.json)
+          $context.companion = $tools.companion
+          Invoke-WorkflowOperation reconcile $context -Instance action-canary `
+            -Head $env:CANARY_HEAD -Platforms $env:CANARY_PLATFORM
       - name: Analyze with source-built tools
         id: analyze
         uses: ./
@@ -142,17 +286,21 @@ jobs:
           source-path: ${{ steps.fixture.outputs.source }}
           working-directory: ${{ steps.fixture.outputs.workspace }}
           local-path: ${{ steps.fixture.outputs.store }}
-          machine-keys: ${{ steps.fixture.outputs.machine-keys }}
+          current-collections: ${{ steps.collection.outputs.current-collections }}
+          # Include the fixed-date synthetic fixture, independently of the live clock.
+          since: '2000-01-01'
           context: HEAD
-          expected-platforms: canary
-          completed-platforms: canary
+          expected-platforms: ${{ matrix.runner }}
+          # This single-platform canary reaches analysis only after successful
+          # reconciliation or an explicit fork policy skip.
+          completed-platforms: ${{ matrix.runner }}
       - name: Verify real collection and honest reports
         shell: pwsh
         env:
           CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
           CANARY_STORE: ${{ steps.fixture.outputs.store }}
-          CANARY_KEY: ${{ steps.collect.outputs.machine-key }}
-          CANARY_COLLECTION: ${{ toJSON(steps.collect.outputs) }}
+          CANARY_KEY: ${{ steps.fixture.outputs.machine-key }}
+          CANARY_COLLECTION: ${{ steps.fixture.outputs.collection-json }}
           CANARY_ANALYSIS: ${{ toJSON(steps.analyze.outputs) }}
         run: |
           & .\tests\Assert-Canary.ps1 -Workspace $env:CANARY_WORKSPACE -Store $env:CANARY_STORE `

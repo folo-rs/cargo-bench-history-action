@@ -552,6 +552,11 @@ Describe 'Canary workflow wiring in <file>' -ForEach @(
         foreach ($step in $canaryJob.steps) {
             if ($step['id']) { $canarySteps[$step.id] = $step }
         }
+        $script:canaryCollectionJob = if ($file -eq 'test') { $canaryWorkflow.jobs['path-collect'] } else { $canaryJob }
+        $script:canaryCollectionSteps = @{}
+        foreach ($step in $canaryCollectionJob.steps) {
+            if ($step['id']) { $canaryCollectionSteps[$step.id] = $step }
+        }
     }
 
     It 'pins the Rust bootstrap implementation while retaining the rolling stable compiler' {
@@ -562,24 +567,35 @@ Describe 'Canary workflow wiring in <file>' -ForEach @(
     }
 
     It 'backfills between collection and analysis without another root-action installation' {
-        $ids = @($canaryJob.steps | ForEach-Object { $_['id'] })
+        $steps = if ($file -eq 'test') { @($canaryCollectionJob.steps) + @($canaryJob.steps) } else { $canaryJob.steps }
+        $ids = @($steps | ForEach-Object { $_['id'] })
         [array]::IndexOf($ids, 'backfill') | Should -BeGreaterThan ([array]::IndexOf($ids, 'collect'))
         [array]::IndexOf($ids, 'backfill') | Should -BeLessThan ([array]::IndexOf($ids, 'analyze'))
-        $actions = @($canaryJob.steps | Where-Object { $_['uses'] -ceq './' })
+        $actions = @($steps | Where-Object { $_['uses'] -ceq './' })
         @($actions | ForEach-Object { $_.with.command }) | Should -Be @('collect', 'analyze-history')
-        $canarySteps.backfill.ContainsKey('continue-on-error') | Should -BeFalse
-        $canarySteps.backfill.env.CANARY_WORKSPACE | Should -BeExactly $canarySteps.collect.with['working-directory']
-        $canarySteps.backfill.env.CANARY_STORE | Should -BeExactly $canarySteps.collect.with['local-path']
-        $reference = [regex]::Match($canarySteps.backfill.env.CANARY_KEY, 'steps\.([^.]+)\.outputs\.([^. ]+)')
-        $canarySteps.ContainsKey($reference.Groups[1].Value) | Should -BeTrue
+        $canaryCollectionSteps.backfill.ContainsKey('continue-on-error') | Should -BeFalse
+        $canaryCollectionSteps.backfill.env.CANARY_WORKSPACE | Should -BeExactly $canaryCollectionSteps.collect.with['working-directory']
+        $canaryCollectionSteps.backfill.env.CANARY_STORE | Should -BeExactly $canaryCollectionSteps.collect.with['local-path']
+        $reference = [regex]::Match($canaryCollectionSteps.backfill.env.CANARY_KEY, 'steps\.([^.]+)\.outputs\.([^. ]+)')
+        $canaryCollectionSteps.ContainsKey($reference.Groups[1].Value) | Should -BeTrue
         $rootAction.outputs.ContainsKey($reference.Groups[2].Value) | Should -BeTrue
+        if ($file -eq 'test') { $canaryJob.needs | Should -Contain 'path-collect' }
     }
 
     It 'runs no direct core backfill when ordinary collection was policy-skipped' {
         foreach ($skipped in @($true, $false)) {
-            $condition = $canarySteps.backfill.if.Replace('steps.collect.outputs.skipped', 'needs.prepare.outputs.skipped')
+            $condition = $canaryCollectionSteps.backfill.if.Replace('steps.collect.outputs.skipped', 'needs.prepare.outputs.skipped')
             Test-SelectionCondition $condition $skipped $false $false | Should -Be (-not $skipped)
         }
+    }
+
+    It 'uses exact current snapshots with ordinary stored history available for comparison' {
+        $canaryCollectionSteps.collect.with['collection-snapshot'] | Should -BeExactly 'true'
+        $canaryCollectionSteps.collect.with['on-existing'] | Should -BeExactly 'skip'
+        $canarySteps.analyze.with.ContainsKey('machine-keys') | Should -BeFalse
+        $canarySteps.analyze.with['current-collections'] | Should -Not -BeNullOrEmpty
+        $canarySteps.analyze.with['local-path'] | Should -BeExactly '${{ steps.fixture.outputs.store }}'
+        $canarySteps.analyze.with.since | Should -BeExactly '2000-01-01'
     }
 
     Context 'Bounded report upload retries' {
@@ -689,6 +705,58 @@ Describe 'Canary workflow wiring in <file>' -ForEach @(
                 }
             }
         }
+    }
+}
+
+Describe 'Hosted source collection reconciliation' {
+    BeforeAll {
+        $script:sourceWorkflow = Get-Content (Join-Path $root '.github\workflows\test.yml') -Raw | ConvertFrom-Yaml
+        $script:sourceCollector = $sourceWorkflow.jobs['path-collect']
+        $script:sourceAnalyzer = $sourceWorkflow.jobs['path-smoke']
+    }
+
+    It 'waits for real completed jobs with the companion collection identity' {
+        $sourceAnalyzer.needs | Should -Contain 'path-collect'
+        $sourceCollector.name | Should -BeExactly 'cbh-collect:action-canary:${{ matrix.runner }}'
+        $sourceAnalyzer.permissions.actions | Should -BeExactly 'read'
+        $reconcile = @($sourceAnalyzer.steps | Where-Object { $_['id'] -ceq 'collection' })[0]
+        $reconcile.env.GH_TOKEN | Should -BeExactly '${{ github.token }}'
+        $reconcile.run | Should -Match 'Invoke-WorkflowOperation reconcile'
+        $reconcile.run | Should -Not -Match 'jobs-file|jobs-json'
+        $reconcile.ContainsKey('continue-on-error') | Should -BeFalse
+    }
+
+    It 'transports immutable receipts separately from the replaceable supporting fixture' {
+        $uploads = @($sourceCollector.steps | Where-Object { $_['uses'] -like 'actions/upload-artifact@*' })
+        $receipt = @($uploads | Where-Object { $_.with.name -like 'canary-source-receipt-*' })[0]
+        $fixture = @($uploads | Where-Object { $_.with.name -like 'canary-source-fixture-*' })[0]
+        $receipt.with.ContainsKey('overwrite') | Should -BeFalse
+        $receipt.with.path | Should -BeExactly '${{ steps.evidence.outputs.receipt }}'
+        $receipt.with.name | Should -BeLike '*${{ github.run_attempt }}'
+        $fixture.with.overwrite | Should -BeTrue
+        $downloads = @($sourceAnalyzer.steps | Where-Object { $_['uses'] -like 'actions/download-artifact@*' })
+        $receiptDownload = @($downloads | Where-Object { $_.with['pattern'] })[0]
+        $receiptDownload.with.pattern | Should -BeExactly 'canary-source-receipt-${{ matrix.rust_target }}-*'
+        $receiptDownload.with['run-id'] | Should -BeExactly '${{ github.run_id }}'
+        $receiptDownload.with.ContainsKey('merge-multiple') | Should -BeFalse
+        $fixtureDownload = @($downloads | Where-Object { $_.with['name'] })[0]
+        $fixtureDownload.with.name | Should -BeExactly $fixture.with.name
+    }
+
+    It 'keeps collection and analysis on the same manifest-selected source revision' {
+        foreach ($job in @($sourceCollector, $sourceAnalyzer)) {
+            $source = @($job.steps | Where-Object { $_['with'] -and $_.with['repository'] -ceq 'folo-rs/folo' })
+            $source.Count | Should -Be 1
+            $source[0].with.ref | Should -BeExactly '${{ needs.setup.outputs.source }}'
+        }
+    }
+
+    It 'keeps singleton coverage inputs valid even when fork policy skips reconciliation' {
+        $analysis = @($sourceAnalyzer.steps | Where-Object { $_['id'] -ceq 'analyze' })[0]
+        $analysis.with['expected-platforms'] | Should -BeExactly '${{ matrix.runner }}'
+        $analysis.with['completed-platforms'] | Should -BeExactly $analysis.with['expected-platforms']
+        $analysis.with['current-collections'] | Should -BeExactly '${{ steps.collection.outputs.current-collections }}'
+        $analysis.with.ContainsKey('machine-keys') | Should -BeFalse
     }
 }
 

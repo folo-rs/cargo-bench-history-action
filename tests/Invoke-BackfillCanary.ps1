@@ -19,10 +19,11 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Assert-Canary.ps1') -Workspace $Workspace -Store $Store -MachineKey $MachineKey
 
 function Get-CanaryCollectionTool {
-    param([string] $Workspace, [string] $TemporaryDirectory)
+    param([string] $Workspace, [string] $TemporaryDirectory,
+        [ValidateSet('tool', 'companion')] [string] $Role = 'tool')
     Import-Module (Join-Path $PSScriptRoot '..\scripts\Tools.psm1')
     $manifest = Read-ActionManifest (Join-Path $PSScriptRoot '..\release.json')
-    $main = @($manifest.tools | Where-Object role -CEQ tool)[0].name
+    $package = @($manifest.tools | Where-Object role -CEQ $Role)[0].name
     $workspacePath = (Get-Item -LiteralPath $Workspace).FullName
     # This is a CI-only consumer of the bootstrap's existing state, not a public
     # root-action output or a second installation. Ambiguity must fail the probe.
@@ -32,7 +33,7 @@ function Get-CanaryCollectionTool {
             $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -AsHashtable
             $inputs = Get-Content -LiteralPath $state.inputPath -Raw | ConvertFrom-Json -AsHashtable
             if ($inputs.command -ceq 'collect' -and $inputs['working-directory'] -ceq $workspacePath) {
-                (Get-Item -LiteralPath $state.executables[$main] -ErrorAction Stop).FullName
+                (Get-Item -LiteralPath $state.executables[$package] -ErrorAction Stop).FullName
             }
         })
     if ($tools.Count -ne 1) { throw 'Expected exactly one installed root-action collector for this fixture.' }
