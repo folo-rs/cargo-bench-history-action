@@ -86,6 +86,12 @@ $global:LASTEXITCODE = 0
         }
     }
 
+    It 'sets an independent hosted project identity before collecting the fixture' {
+        & $initializer -Root $script:root -Method path -SourcePath $TestDrive -ProjectId action-canary-windows-latest
+        $configuration = Get-Content -LiteralPath (Join-Path $script:root 'workspace\.cargo\bench_history.toml')
+        $configuration | Should -Be @('[project]', 'id = "action-canary-windows-latest"')
+    }
+
     It 'rejects missing fixture producers before calling the installer' {
         Mock Read-ActionManifest { @{ tools = @(@{ name = 'companion'; role = 'companion' }) } }
         { & $initializer -Root $script:root -Method binstall } | Should -Throw

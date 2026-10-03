@@ -77,9 +77,9 @@ jobs:
           & .\scripts\Publish-Release.ps1 -CheckOnly -BaseRef $base
 
   path-collect:
-    # This instance matches tests/fixture/.cargo/bench_history.toml; the receipt
-    # step verifies it against the companion's canonical output.
-    name: cbh-collect:action-canary:${{ matrix.runner }}
+    # Each independent platform pair owns a distinct project in the run-wide job
+    # inventory. Fixture configuration and receipt checks use this same identity.
+    name: cbh-collect:action-canary-${{ matrix.runner }}:${{ matrix.runner }}
     needs: setup
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -106,11 +106,13 @@ jobs:
       - name: Prepare isolated synthetic benchmark fixture
         id: fixture
         shell: pwsh
+        env:
+          CANARY_INSTANCE: action-canary-${{ matrix.runner }}
         run: |
           $source = Join-Path $env:GITHUB_WORKSPACE 'Folo'
           "source=$source" >> $env:GITHUB_OUTPUT
           $root = Join-Path $env:RUNNER_TEMP "source-smoke-$([guid]::NewGuid().ToString('N'))"
-          & .\tests\Initialize-Canary.ps1 -Root $root -Method path -SourcePath $source
+          & .\tests\Initialize-Canary.ps1 -Root $root -Method path -SourcePath $source -ProjectId $env:CANARY_INSTANCE
       - name: Collect with source-built tools
         id: collect
         uses: ./
@@ -142,6 +144,7 @@ jobs:
           CANARY_ROOT: ${{ steps.fixture.outputs.root }}
           CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
           CANARY_PLATFORM: ${{ matrix.runner }}
+          CANARY_INSTANCE: action-canary-${{ matrix.runner }}
           CANARY_COLLECTION: ${{ toJSON(steps.collect.outputs) }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -152,7 +155,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cannot identify the collected fixture head.' }
           $receipt = Join-Path $env:CANARY_ROOT 'receipt.json'
           if ($collection['skipped'] -cne 'true') {
-            if ($collection['instance'] -cne 'action-canary') { throw 'Canary job marker disagrees with the canonical project.' }
+            if ($collection['instance'] -cne $env:CANARY_INSTANCE) { throw 'Canary job marker disagrees with the canonical project.' }
             $companion = Get-CanaryCollectionTool -Workspace $env:CANARY_WORKSPACE -TemporaryDirectory $env:RUNNER_TEMP -Role companion
             $context = @{ companion = $companion; 'receipt-file' = $receipt }
             Invoke-WorkflowOperation receipt $context -Instance $collection['instance'] -Head $head `
@@ -240,8 +243,16 @@ jobs:
           "store=$(Join-Path $root 'store')" >> $env:GITHUB_OUTPUT
           "head=$head" >> $env:GITHUB_OUTPUT
           "skipped=$($metadata.collection['skipped'])" >> $env:GITHUB_OUTPUT
+          "instance=$($metadata.collection['instance'])" >> $env:GITHUB_OUTPUT
           "machine-key=$($metadata.collection['machine-key'])" >> $env:GITHUB_OUTPUT
           "collection-json=$($metadata.collection | ConvertTo-Json -Compress)" >> $env:GITHUB_OUTPUT
+          if ($metadata.collection['skipped'] -ceq 'true') {
+            # Keep scoped input syntax valid for the fork gate, without claiming
+            # any collected evidence or providing a nonfork reconciliation fallback.
+            $skippedCollections = Join-Path $root 'skipped-current-collections'
+            New-Item -ItemType Directory -Path $skippedCollections | Out-Null
+            "skipped-collections=$skippedCollections" >> $env:GITHUB_OUTPUT
+          }
       - name: Download every collection attempt for this platform
         if: steps.fixture.outputs.skipped != 'true'
         uses: actions/download-artifact@v8
@@ -262,6 +273,7 @@ jobs:
           CANARY_SOURCE: ${{ steps.fixture.outputs.source }}
           CANARY_HEAD: ${{ steps.fixture.outputs.head }}
           CANARY_PLATFORM: ${{ matrix.runner }}
+          CANARY_INSTANCE: ${{ steps.fixture.outputs.instance }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module .\scripts\Workflow.psm1
@@ -275,7 +287,7 @@ jobs:
           }
           $tools = Install-WorkflowTool $context (Read-ActionManifest .\release.json)
           $context.companion = $tools.companion
-          Invoke-WorkflowOperation reconcile $context -Instance action-canary `
+          Invoke-WorkflowOperation reconcile $context -Instance $env:CANARY_INSTANCE `
             -Head $env:CANARY_HEAD -Platforms $env:CANARY_PLATFORM
       - name: Analyze with source-built tools
         id: analyze
@@ -286,7 +298,7 @@ jobs:
           source-path: ${{ steps.fixture.outputs.source }}
           working-directory: ${{ steps.fixture.outputs.workspace }}
           local-path: ${{ steps.fixture.outputs.store }}
-          current-collections: ${{ steps.collection.outputs.current-collections }}
+          current-collections: ${{ steps.fixture.outputs.skipped == 'true' && steps.fixture.outputs.skipped-collections || steps.collection.outputs.current-collections }}
           # Include the fixed-date synthetic fixture, independently of the live clock.
           since: '2000-01-01'
           context: HEAD

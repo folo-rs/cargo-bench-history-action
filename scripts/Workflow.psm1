@@ -217,8 +217,10 @@ function Invoke-WorkflowOperation {
         # Missing optional analysis input must not select independent store analysis.
         # Ref: docs/implementation.md, "Reusable workflow orchestration".
         if (-not $outputs.ContainsKey('current-collections') -or
-            $outputs['current-collections'] -cne $Context['current-collection-directory']) {
-            throw 'Reconciliation did not emit its selected current-collections directory.'
+            [string]::IsNullOrWhiteSpace($outputs['current-collections']) -or
+            -not [IO.Path]::IsPathFullyQualified($outputs['current-collections']) -or
+            -not (Test-Path -LiteralPath $outputs['current-collections'] -PathType Container)) {
+            throw 'Reconciliation did not emit an absolute existing current-collections directory.'
         }
     }
 }

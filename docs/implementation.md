@@ -221,8 +221,10 @@ per-artifact-directory layouts, enforcing the same identity/latest-job checks fo
 Legacy receipts do not establish scoped collection evidence. `prepare-analysis`
 receives `--current-collection-dir`, writes only the selected
 `<platform>/collection.json` files and emits `current-collections`. The adapter
-requires that output to identify its requested destination before root analysis
-receives it. Receipt selection, empty-collection handling, payload validation and
+requires an absolute existing output directory before root analysis receives it.
+It consumes Rust's checked native path without requiring the input's spelling;
+physical path normalization can resolve aliases and simplify native prefixes.
+Receipt selection, empty-collection handling, payload validation and
 duplicate current-identity rejection remain Rust-owned.
 The analysis cache has a stable instance-scoped path outside both checkouts. History
 can save read-cache updates; PR analysis only restores them.
@@ -337,8 +339,11 @@ copy the root action's exact `collection-file` bytes into the selected platform
 directory and analyze with `current-collections`, not machine-key selection.
 
 The source canary separates collection and analysis jobs so `prepare-analysis`
-can inspect real completed GitHub jobs. Each collection job uses the companion's
-canonical job marker, runs the normal backfill probe and records a self-contained
+can inspect real completed GitHub jobs. Each independent platform smoke pair uses
+a distinct project identity in both its fixture configuration and the companion's
+canonical job marker. Its analysis therefore selects only its own platform without
+classifying another smoke pair's jobs as unexpected platforms. Each collection job
+runs the normal backfill probe and records a self-contained
 receipt using its already-installed companion. Immutable receipt artifacts retain
 all platform attempts. Analysis downloads the authenticated run-wide receipts and
 uses the production workflow adapter to reconcile them before root-action analysis.

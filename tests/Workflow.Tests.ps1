@@ -194,6 +194,7 @@ Describe 'Workflow adapter' {
                 Mock Invoke-WorkflowProcess {
                     param($Arguments)
                     $destination = $Arguments[([array]::IndexOf($Arguments, '--current-collection-dir') + 1)]
+                    $null = New-Item -ItemType Directory -Path $destination
                     "current-collections=$destination" | Set-Content -LiteralPath $Arguments[-1]
                 } -ParameterFilter { 'prepare-analysis' -cin $Arguments }
             }
@@ -456,22 +457,34 @@ Describe 'Workflow adapter' {
                 }
             }
 
-            It 'rejects a missing or contradictory scoped reconciliation handoff (<kind>)' -ForEach @(
+            It 'rejects an unusable scoped reconciliation handoff (<kind>)' -ForEach @(
                 @{ kind = 'missing file' }, @{ kind = 'missing output' }, @{ kind = 'empty directory' }
-                @{ kind = 'different directory' }, @{ kind = 'duplicate output' }
+                @{ kind = 'absent directory' }, @{ kind = 'relative directory' }, @{ kind = 'duplicate output' }
             ) {
                 Mock Invoke-WorkflowProcess {} -ParameterFilter { 'prepare-analysis' -cin $Arguments }
                 $destination = $script:operationContext['current-collection-directory']
                 switch ($kind) {
                     'missing output' { Set-Content $script:operationOutput 'completed-platforms=linux' }
                     'empty directory' { Set-Content $script:operationOutput 'current-collections=' }
-                    'different directory' { Set-Content $script:operationOutput "current-collections=$script:temp" }
+                    'absent directory' { Set-Content $script:operationOutput "current-collections=$destination" }
+                    'relative directory' { Set-Content $script:operationOutput 'current-collections=.' }
                     'duplicate output' {
                         Set-Content $script:operationOutput @("current-collections=$destination", "current-collections=$destination")
                     }
                 }
                 { Invoke-WorkflowOperation reconcile $script:operationContext -Instance project -Head head `
                         -Platforms linux -RunId 42 -OutputPath $script:operationOutput } | Should -Throw
+            }
+
+            It 'consumes the checked native destination without requiring the original path spelling' {
+                Mock Invoke-WorkflowProcess {
+                    param($Arguments)
+                    $destination = $Arguments[([array]::IndexOf($Arguments, '--current-collection-dir') + 1)]
+                    $null = New-Item -ItemType Directory -Path $destination
+                    "current-collections=$(Join-Path $destination '.')" | Set-Content -LiteralPath $Arguments[-1]
+                } -ParameterFilter { 'prepare-analysis' -cin $Arguments }
+                { Invoke-WorkflowOperation reconcile $script:operationContext -Instance project -Head head `
+                        -Platforms linux -RunId 42 -OutputPath $script:operationOutput } | Should -Not -Throw
             }
 
             It 'never turns a failed companion process into success' {

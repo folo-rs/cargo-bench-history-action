@@ -717,7 +717,7 @@ Describe 'Hosted source collection reconciliation' {
 
     It 'waits for real completed jobs with the companion collection identity' {
         $sourceAnalyzer.needs | Should -Contain 'path-collect'
-        $sourceCollector.name | Should -BeExactly 'cbh-collect:action-canary:${{ matrix.runner }}'
+        $sourceCollector.name | Should -BeExactly 'cbh-collect:action-canary-${{ matrix.runner }}:${{ matrix.runner }}'
         $sourceAnalyzer.permissions.actions | Should -BeExactly 'read'
         $reconcile = @($sourceAnalyzer.steps | Where-Object { $_['id'] -ceq 'collection' })[0]
         $reconcile.env.GH_TOKEN | Should -BeExactly '${{ github.token }}'
@@ -755,8 +755,59 @@ Describe 'Hosted source collection reconciliation' {
         $analysis = @($sourceAnalyzer.steps | Where-Object { $_['id'] -ceq 'analyze' })[0]
         $analysis.with['expected-platforms'] | Should -BeExactly '${{ matrix.runner }}'
         $analysis.with['completed-platforms'] | Should -BeExactly $analysis.with['expected-platforms']
-        $analysis.with['current-collections'] | Should -BeExactly '${{ steps.collection.outputs.current-collections }}'
+        $analysis.with['current-collections'] | Should -BeExactly '${{ steps.fixture.outputs.skipped == ''true'' && steps.fixture.outputs.skipped-collections || steps.collection.outputs.current-collections }}'
         $analysis.with.ContainsKey('machine-keys') | Should -BeFalse
+    }
+
+    It 'isolates every independent platform pair in the complete run-wide job inventory' {
+        $prepare = @($sourceCollector.steps | Where-Object { $_['id'] -ceq 'fixture' })[0]
+        $receipt = @($sourceCollector.steps | Where-Object { $_['id'] -ceq 'evidence' })[0]
+        $reconcile = @($sourceAnalyzer.steps | Where-Object { $_['id'] -ceq 'collection' })[0]
+        $prepare.run | Should -Match '-ProjectId \$env:CANARY_INSTANCE'
+        $receipt.env.CANARY_INSTANCE | Should -BeExactly $prepare.env.CANARY_INSTANCE
+        $reconcile.env.CANARY_INSTANCE | Should -BeExactly '${{ steps.fixture.outputs.instance }}'
+        $reconcile.run | Should -Match '-Instance \$env:CANARY_INSTANCE'
+        $jobs = @(foreach ($target in $manifest.targets) {
+            $values = @{ matrix = @{ runner = $target.runner } }
+            @{
+                platform = $target.runner
+                instance = Expand-ContractValue $prepare.env.CANARY_INSTANCE $values
+                name = Expand-ContractValue $sourceCollector.name $values
+            }
+        })
+        @($jobs.instance | Select-Object -Unique).Count | Should -Be $manifest.targets.Count
+        foreach ($job in $jobs) {
+            $matching = @($jobs | Where-Object { $_.name.StartsWith("cbh-collect:$($job.instance):", [StringComparison]::Ordinal) })
+            $matching.Count | Should -Be 1
+            $matching[0].platform | Should -BeExactly $job.platform
+        }
+    }
+
+    It 'creates an empty scoped path only for an explicit policy skip' {
+        $restore = @($sourceAnalyzer.steps | Where-Object { $_['id'] -ceq 'fixture' })[0]
+        # Run the actual output branch independently of archive extraction and Git.
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($restore.run, [ref] $tokens, [ref] $errors)
+        $errors.Count | Should -Be 0
+        $branch = @($ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.IfStatementAst] -and
+                $node.Extent.Text.Contains('skipped-current-collections')
+        }, $true))
+        $branch.Count | Should -Be 1
+        $previousOutput = $env:GITHUB_OUTPUT
+        try {
+            foreach ($skipped in @('true', 'false')) {
+                $root = Join-Path $TestDrive "fork-path-$skipped"
+                $null = New-Item -ItemType Directory -Path $root
+                $env:GITHUB_OUTPUT = Join-Path $root 'outputs'
+                $metadata = @{ collection = @{ skipped = $skipped } }
+                & ([scriptblock]::Create($branch[0].Extent.Text))
+                Test-Path -LiteralPath (Join-Path $root 'skipped-current-collections') | Should -Be ($skipped -ceq 'true')
+                Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -Be ($skipped -ceq 'true')
+            }
+        } finally { $env:GITHUB_OUTPUT = $previousOutput }
     }
 }
 

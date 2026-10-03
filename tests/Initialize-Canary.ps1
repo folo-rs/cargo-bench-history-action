@@ -9,7 +9,8 @@ param(
     [Parameter(Mandatory)] [string] $Root,
     [Parameter(Mandatory)] [ValidateSet('path', 'install', 'binstall')] [string] $Method,
     [string] $SourcePath,
-    [string] $ExistingToolRoot
+    [string] $ExistingToolRoot,
+    [ValidatePattern('^[a-z][a-z0-9-]*$')] [string] $ProjectId
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -24,6 +25,12 @@ $workspace = Join-Path $Root 'workspace'
 $null = New-Item -ItemType Directory -Path $workspace
 Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'fixture') -Force |
     Copy-Item -Destination $workspace -Recurse
+if ($ProjectId) {
+    # Independent hosted collection/analysis pairs need distinct project identities
+    # within the same run's job inventory. Ref: docs/implementation.md, "CI evidence".
+    Set-Content -LiteralPath (Join-Path $workspace '.cargo\bench_history.toml') `
+        -Value @('[project]', "id = `"$ProjectId`"")
+}
 $collections = Join-Path $Root 'current-collections'
 $null = New-Item -ItemType Directory -Path $collections
 
