@@ -86,6 +86,8 @@ jobs:
           working-directory: ${{ steps.fixture.outputs.workspace }}
           local-path: ${{ steps.fixture.outputs.store }}
           bench: synthetic
+          collection-snapshot: 'true'
+          on-existing: skip
       - name: Backfill and resume on the collection runner
         id: backfill
         if: steps.collect.outputs.skipped != 'true'
@@ -93,13 +95,15 @@ jobs:
         env:
           CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
           CANARY_STORE: ${{ steps.fixture.outputs.store }}
-          CANARY_KEYS: ${{ steps.fixture.outputs.machine-keys }}
+          CANARY_COLLECTIONS: ${{ steps.fixture.outputs.current-collections }}
+          CANARY_COLLECTION_FILE: ${{ steps.collect.outputs.collection-file }}
           CANARY_KEY: ${{ steps.collect.outputs.machine-key }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:CANARY_KEY)) { throw 'Collection emitted no machine key.' }
           & .\tests\Invoke-BackfillCanary.ps1 -Workspace $env:CANARY_WORKSPACE `
             -Store $env:CANARY_STORE -MachineKey $env:CANARY_KEY
-          Set-Content -LiteralPath (Join-Path $env:CANARY_KEYS 'machine-key.txt') -Value $env:CANARY_KEY
+          . .\tests\Assert-Canary.ps1
+          Copy-CanaryCollection -CollectionFile $env:CANARY_COLLECTION_FILE -Directory $env:CANARY_COLLECTIONS
       - name: Analyze through the current root action
         id: analyze
         uses: ./
@@ -108,7 +112,9 @@ jobs:
           install-method: ${{ matrix.method }}
           working-directory: ${{ steps.fixture.outputs.workspace }}
           local-path: ${{ steps.fixture.outputs.store }}
-          machine-keys: ${{ steps.fixture.outputs.machine-keys }}
+          current-collections: ${{ steps.fixture.outputs.current-collections }}
+          # Include the fixed-date synthetic fixture, independently of the live clock.
+          since: '2000-01-01'
           context: HEAD
           expected-platforms: canary
           completed-platforms: canary

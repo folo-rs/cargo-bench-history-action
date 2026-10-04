@@ -35,6 +35,21 @@ The output file is the current step's `GITHUB_OUTPUT`. The temporary root is out
 the measured checkout. Publication uses the normal ambient GitHub repository/run
 context where an explicit execution-data input is absent.
 
+Root collection accepts the optional boolean string `collection-snapshot`, with a
+runtime default of false. When enabled, Rust allocates an external snapshot path,
+passes `--collection-output` to the core and emits the absolute `collection-file`
+output after successful execution and persistence handling. The versioned snapshot
+contains the exact per-engine runs, including when `on-existing: skip` preserves
+an existing stored object. The companion derives its machine key from that snapshot.
+PowerShell does not interpret the snapshot or compose measurement data.
+
+Root analysis accepts `current-collections`, a directory containing selected
+`<platform>/collection.json` files, instead of `machine-keys`. The companion validates
+and forwards the snapshots through core `--current-collection` arguments. Scoped
+current observations bypass stored and cached values for the analyzed context;
+normal matching history remains available for baselines. Omitting scoped inputs
+preserves the independent store-analysis interface.
+
 `max-commits` is an optional backfill-only runtime string. The reusable workflow
 and root action default it to `''`; the JSON handoff preserves that empty string
 for unlimited replay and preserves supplied values without numeric conversion.
@@ -196,10 +211,21 @@ through the root action and controls only its per-commit failure policy.
 The hosted timeout remains an exceptional watchdog whose cancellation is visible,
 not a normal completion mechanism.
 
-Collection records a receipt only after the root command and actual key capture
-succeed. Artifacts include project, flow, platform and attempt; downloads use the
+Collection records a receipt only after the root command supplies its snapshot.
+The adapter passes that file to `collection-receipt --collection-file`; the
+companion validates it and embeds its version-1 payload in a version-2 receipt.
+One self-contained `receipt.json` is uploaded, without a second payload path or a
+shared-store reference. Artifacts include project, flow, platform and attempt; downloads use the
 authenticated run-wide view. Rust accepts the downloader's flat single-receipt and
 per-artifact-directory layouts, enforcing the same identity/latest-job checks for both.
+Legacy receipts do not establish scoped collection evidence. `prepare-analysis`
+receives `--current-collection-dir`, writes only the selected
+`<platform>/collection.json` files and emits `current-collections`. The adapter
+requires an absolute existing output directory before root analysis receives it.
+It consumes Rust's checked native path without requiring the input's spelling;
+physical path normalization can resolve aliases and simplify native prefixes.
+Receipt selection, empty-collection handling, payload validation and
+duplicate current-identity rejection remain Rust-owned.
 The analysis cache has a stable instance-scoped path outside both checkouts. History
 can save read-cache updates; PR analysis only restores them.
 
@@ -291,7 +317,8 @@ Folo checkouts. The workspace is virtual: its benchmark belongs to a non-root me
 because the companion's package-ownership library excludes workspace-root packages. The root
 still owns the benchmark-history configuration. Its small benchmark entry point
 delegates to the manifest-pinned faker, producing deterministic engine output without
-wall-clock measurements.
+wall-clock measurements. Fixed Git dates keep fixture commit identities stable
+across workflow attempts; analysis explicitly includes that synthetic history.
 No canary posts issues or comments. The fixture has a working synthetic benchmark
 at both commits, with generated build output Git-ignored so historical worktrees
 store clean observations. Ordinary collection stores the tip, then the canary
@@ -307,7 +334,28 @@ the tip's original object hash. Repeating backfill with a valid but nonexistent
 benchmark target must succeed while every stored file and hash stays unchanged,
 proving resumption skips execution as well as writes. Analysis then requires
 parseable reports about the tip, a nonempty series census and an honest
-insufficient-baseline outcome for this short history.
+insufficient-baseline outcome for this short history. Published-method canaries
+copy the root action's exact `collection-file` bytes into the selected platform
+directory and analyze with `current-collections`, not machine-key selection.
+
+The source canary separates collection and analysis jobs so `prepare-analysis`
+can inspect real completed GitHub jobs. Each independent platform smoke pair uses
+a distinct project identity in both its fixture configuration and the companion's
+canonical job marker. Its analysis therefore selects only its own platform without
+classifying another smoke pair's jobs as unexpected platforms. Each collection job
+runs the normal backfill probe and records a self-contained
+receipt using its already-installed companion. Immutable receipt artifacts retain
+all platform attempts. Analysis downloads the authenticated run-wide receipts and
+uses the production workflow adapter to reconcile them before root-action analysis.
+Both jobs use the same pinned Folo source revision.
+
+A separate per-platform archive transports only the synthetic Git checkout, local
+baseline store and collection output metadata. That supporting fixture is replaced
+when its platform is rerun; untouched platforms retain theirs. It carries no
+installed binaries or build outputs and cannot replace the current values embedded
+in the selected receipt. This transport is canary-only: reusable workflows continue
+to read their configured shared history and upload only collection receipts.
+
 Fork-triggered canaries instead assert the root action's explicit fork skip for both
 commands and reject any claimed collection or report evidence. This never bypasses
 published availability: every exact registry/prebuilt installation, asset check and

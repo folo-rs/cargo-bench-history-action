@@ -7,6 +7,7 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\scripts\Tools.psm1')
     $script:manifest = Read-ActionManifest (Join-Path $PSScriptRoot '..\release.json')
     $script:mainPackage = @($manifest.tools | Where-Object role -CEQ tool)[0].name
+    $script:companionPackage = @($manifest.tools | Where-Object role -CEQ companion)[0].name
 
     function Write-CanaryRunFixture {
         param([string] $Commit, [hashtable] $Changes = @{})
@@ -30,7 +31,7 @@ BeforeAll {
         $inputs = Join-Path $root 'inputs.json'
         @{ command = $Command; 'working-directory' = $Workspace } |
             ConvertTo-Json | Set-Content -LiteralPath $inputs
-        @{ inputPath = $inputs; executables = @{ $script:mainPackage = $script:tool } } |
+        @{ inputPath = $inputs; executables = @{ $script:mainPackage = $script:tool; $script:companionPackage = $script:companion } } |
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'state.json')
     }
 }
@@ -45,6 +46,8 @@ Describe 'Stored backfill and resumption evidence' {
         $script:parent = 'a' * 40
         $script:tool = Join-Path $TestDrive 'main.ps1'
         Set-Content -LiteralPath $script:tool 'exit 0'
+        $script:companion = Join-Path $TestDrive 'companion.ps1'
+        Set-Content -LiteralPath $script:companion 'exit 0'
         $script:offline = $env:CARGO_NET_OFFLINE
         Write-CanaryRunFixture $script:head
         Mock git {
@@ -128,6 +131,7 @@ Describe 'Stored backfill and resumption evidence' {
         Write-CollectorStateFixture -Name analysis -Command analyze-history
         Write-CollectorStateFixture -Name another -Workspace (Join-Path $TestDrive 'another-workspace')
         Get-CanaryCollectionTool $script:workspace $script:temporary | Should -BeExactly $script:tool
+        Get-CanaryCollectionTool $script:workspace $script:temporary -Role companion | Should -BeExactly $script:companion
     }
 
     It 'rejects malformed or uncompressed stored bodies' {

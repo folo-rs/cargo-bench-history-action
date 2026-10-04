@@ -45,13 +45,10 @@ outputs:
     description: Selected source checkout for path installation.
   receipt-file:
     value: ${{ steps.layout.outputs.receipt-file }}
-    description: Successful collection receipt destination.
+    description: Successful collection receipt and embedded snapshot destination.
   receipts-directory:
     value: ${{ steps.layout.outputs.receipts-directory }}
     description: Artifact download destination.
-  machine-key-directory:
-    value: ${{ steps.layout.outputs.machine-key-directory }}
-    description: Reconciled machine-key destination.
   cache-directory:
     value: ${{ steps.layout.outputs.cache-directory }}
     description: Stable instance-scoped analysis cache directory.

@@ -33,12 +33,18 @@ runtime, not defaults shared between unrelated commands. Unknown input names are
 rejected even when their values are empty.
 
 Analysis receives explicit expected/completed platform evidence so it can emit
-`partial-platform-coverage` without inventing coverage from machine keys. The keys
-select comparable data; they are not provenance identifiers.
-The `machine-keys` input selects a directory of collection key files, found
-recursively as `<platform>/machine-key.txt`. Callers aggregate only the selected
-successful collections into that directory; platform coverage remains explicit
-and separate.
+`partial-platform-coverage` without inventing coverage from machine keys.
+Collect-and-analyze callers enable `collection-snapshot` on collection and pass
+the selected snapshots through the `current-collections` directory input.
+Snapshots contain the exact measurements from those executions. Current observations
+and series come only from those snapshots; stored history supplies comparable
+baselines, not additional current data. PR analysis likewise uses only the selected
+snapshots on the branch side and normal matching base-ref history for comparison.
+
+Independent store analysis remains available through the mutually exclusive
+`machine-keys` input, a directory of `<platform>/machine-key.txt` files. Keys select
+comparable storage partitions, not collection provenance. Explicit platform
+coverage remains separate in either mode.
 
 The internal report namespace follows the core's canonical storage project identity.
 It has no consumer override. Source/configuration inputs and process arguments remain
@@ -47,11 +53,19 @@ data, not interpolated shell programs.
 ## Shared workflow behavior
 
 The workflow owns its collect matrix; a caller matrix is not required. Each
-successful collection supplies a receipt bound to its run, attempt, frozen commit,
-platform and actual hardware key. Analysis selects the latest completed attempt
+successful collection supplies a receipt containing its exact snapshot, bound to
+its run, attempt, frozen commit, platform and actual hardware key. Analysis selects the latest completed attempt
 for each expected platform. A failed retry cannot reuse older success; an untouched
 successful leg remains eligible. No successful collection is an execution failure,
-not an empty-scope verdict.
+not an empty-scope verdict. Missing, incompatible or corrupt selected evidence
+cannot fall back to broader store selection. Valid empty collections are recorded,
+but analysis requires at least one selected current benchmark subject.
+
+Collection uses `on-existing: skip` to preserve already-stored history. The snapshot
+still contains this execution's freshly measured values, even when persistence
+retains an earlier measurement. A standalone store analysis of the same commit
+can therefore differ from the workflow report. Concurrent store writes cannot
+replace the report's selected current values.
 
 Supported collection runners are x64 Linux, x64 Windows and Apple Silicon macOS,
 with Linux and Windows selected by default. Callers can include `macos-latest`

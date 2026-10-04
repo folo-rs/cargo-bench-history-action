@@ -9,7 +9,8 @@ param(
     [Parameter(Mandatory)] [string] $Root,
     [Parameter(Mandatory)] [ValidateSet('path', 'install', 'binstall')] [string] $Method,
     [string] $SourcePath,
-    [string] $ExistingToolRoot
+    [string] $ExistingToolRoot,
+    [ValidatePattern('^[a-z][a-z0-9-]*$')] [string] $ProjectId
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -24,8 +25,14 @@ $workspace = Join-Path $Root 'workspace'
 $null = New-Item -ItemType Directory -Path $workspace
 Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'fixture') -Force |
     Copy-Item -Destination $workspace -Recurse
-$keys = Join-Path $Root 'machine-keys'
-$null = New-Item -ItemType Directory -Path $keys
+if ($ProjectId) {
+    # Independent hosted collection/analysis pairs need distinct project identities
+    # within the same run's job inventory. Ref: docs/implementation.md, "CI evidence".
+    Set-Content -LiteralPath (Join-Path $workspace '.cargo\bench_history.toml') `
+        -Value @('[project]', "id = `"$ProjectId`"")
+}
+$collections = Join-Path $Root 'current-collections'
+$null = New-Item -ItemType Directory -Path $collections
 
 $toolRoot = $ExistingToolRoot
 if (-not $toolRoot) {
@@ -40,11 +47,17 @@ $faker = Get-ActionToolPath -Manifest $manifest -Root $toolRoot -Package $fakerT
 $oldTarget = $env:CARGO_TARGET_DIR
 $oldGlobal = $env:GIT_CONFIG_GLOBAL
 $oldSystem = $env:GIT_CONFIG_NOSYSTEM
+$oldAuthorDate = $env:GIT_AUTHOR_DATE
+$oldCommitterDate = $env:GIT_COMMITTER_DATE
 try {
     # Do not inherit personal aliases, signing, hooks or shared build outputs.
     $env:GIT_CONFIG_GLOBAL = Join-Path $Root 'gitconfig'
     Set-Content -LiteralPath $env:GIT_CONFIG_GLOBAL -Value '' -NoNewline
     $env:GIT_CONFIG_NOSYSTEM = '1'
+    # A rerun must retain the same frozen fixture head when reconciling all attempts.
+    # Analysis explicitly includes this fixed synthetic history.
+    $env:GIT_AUTHOR_DATE = '2020-01-01T00:00:00Z'
+    $env:GIT_COMMITTER_DATE = $env:GIT_AUTHOR_DATE
     $env:CARGO_TARGET_DIR = Join-Path $Root 'faker-smoke'
     & $faker --criterion 'probe|synthetic=100@1/99:101' --chdir $workspace
     if ($LASTEXITCODE -ne 0) { throw "Faker smoke failed ($LASTEXITCODE)." }
@@ -75,6 +88,8 @@ finally {
     $env:CARGO_TARGET_DIR = $oldTarget
     $env:GIT_CONFIG_GLOBAL = $oldGlobal
     $env:GIT_CONFIG_NOSYSTEM = $oldSystem
+    $env:GIT_AUTHOR_DATE = $oldAuthorDate
+    $env:GIT_COMMITTER_DATE = $oldCommitterDate
 }
 if ($env:GITHUB_ENV) {
     "ACTION_CANARY_FAKER=$faker" >> $env:GITHUB_ENV
@@ -84,5 +99,5 @@ if ($env:GITHUB_OUTPUT) {
     "workspace=$workspace" >> $env:GITHUB_OUTPUT
     "store=$(Join-Path $Root 'store')" >> $env:GITHUB_OUTPUT
     "root=$Root" >> $env:GITHUB_OUTPUT
-    "machine-keys=$keys" >> $env:GITHUB_OUTPUT
+    "current-collections=$collections" >> $env:GITHUB_OUTPUT
 }

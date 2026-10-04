@@ -225,6 +225,7 @@ jobs:
           features: ${{ inputs.features }}
           rustflags: ${{ inputs.rustflags }}
           on-existing: skip
+          collection-snapshot: 'true'
       - name: Record successful collection evidence
         shell: pwsh
         env:
@@ -233,9 +234,9 @@ jobs:
           CBH_INSTANCE: ${{ needs.prepare.outputs.instance }}
           CBH_HEAD: ${{ needs.prepare.outputs.head }}
           CBH_PLATFORM: ${{ matrix.platform }}
-          CBH_MACHINE_KEY: ${{ steps.collect.outputs.machine-key }}
+          CBH_COLLECTION_FILE: ${{ steps.collect.outputs.collection-file }}
         run: '& (Join-Path $env:CBH_SCRIPTS Run-Workflow.ps1) -Stage receipt'
-      - name: Upload the receipt, not measurement storage
+      - name: Upload the receipt with its exact collection snapshot
         uses: actions/upload-artifact@v7
         with:
           name: pr-bench-history-collection-${{ needs.prepare.outputs.instance }}-${{ matrix.platform }}-${{ github.run_attempt }}
@@ -319,7 +320,7 @@ jobs:
           context: ${{ needs.prepare.outputs.head }}
           base: ${{ needs.prepare.outputs.base }}
           cache: ${{ steps.context.outputs.cache-directory }}
-          machine-keys: ${{ steps.context.outputs.machine-key-directory }}
+          current-collections: ${{ steps.collection.outputs.current-collections }}
           expected-platforms: ${{ needs.prepare.outputs.expected-platforms }}
           completed-platforms: ${{ steps.collection.outputs.completed-platforms }}
       - name: Upload the matching report bundle

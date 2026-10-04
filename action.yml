@@ -30,6 +30,8 @@ inputs:
     description: Benchmark repetitions, keeping the minimum measurement.
   on-existing:
     description: Existing-measurement policy (error, skip or overwrite).
+  collection-snapshot:
+    description: Collect only; emit an exact snapshot of this execution's measurements (true or false, default false).
   all-features:
     description: Enable all Cargo features (true or false).
   no-default-features:
@@ -40,7 +42,9 @@ inputs:
     description: Additional rustc arguments for collect/backfill, using Cargo RUSTFLAGS whitespace splitting.
     default: ''
   machine-keys:
-    description: Directory containing selected platform subdirectories with machine-key.txt files.
+    description: Independent store analysis only; selected machine-key.txt directory, mutually exclusive with current-collections.
+  current-collections:
+    description: Analysis only; directory of selected collection.json snapshots supplying exact current measurements instead of machine-keys.
   cache:
     description: Cloud measurement cache directory; conflicts with local-path.
   context:
@@ -95,6 +99,9 @@ outputs:
   machine-key:
     description: Hardware fingerprint from successful collection.
     value: ${{ steps.invoke.outputs.machine-key }}
+  collection-file:
+    description: Exact collection snapshot path when collection-snapshot is true.
+    value: ${{ steps.invoke.outputs.collection-file }}
   outcome:
     description: Machine-readable analysis outcome.
     value: ${{ steps.invoke.outputs.outcome }}
