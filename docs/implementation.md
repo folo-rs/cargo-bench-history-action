@@ -252,15 +252,10 @@ Tool-pin releases select the full monorepo commit carrying the paired implementa
 and version plan. That commit must be available on GitHub before source-path checks
 can pass; source success does not establish published-tool availability.
 
-Snapshot-capable companion pins require matching `--collection-file` receipt and
-`--current-collection-dir` reconciliation adapters, tracked in
-[#22](https://github.com/folo-rs/cargo-bench-history-action/pull/22).
-A pin-only draft must not ship while its workflows still pass the legacy
-machine-key receipt/reconciliation arguments. Installation availability and
-root-action canaries do not establish this reusable-workflow compatibility.
-After the adapters are integrated, rebase on actual action history and reassess
-the action version, exact tool pins, source canary and release readiness while
-preserving both peak analysis and workflow-scoped measurements.
+Source-path compatibility evidence covers the real collection snapshot,
+`--collection-file` receipt, `--current-collection-dir` reconciliation and
+root-action `current-collections` analysis handoff. Installing binaries alone
+does not establish this workflow contract.
 
 The release job operates after the matrix availability gate and uses the runner's
 PowerShell, Git and GitHub CLI to reconcile repository refs/releases. This is
