@@ -92,6 +92,25 @@ A separate store-based analysis of the same commit can therefore differ from the
 workflow report. Later writes to storage do not change the report's selected
 current measurements.
 
+### Peak-memory analysis
+
+Available `alloc_tracker` peak outstanding-byte measurements participate in history
+and PR analysis by default, without an action input or analysis setting.
+
+Accumulating live memory between benchmark iterations makes peak comparisons
+unreliable: harness-selected batch sizes can change the peak and trigger false
+regression alerts. Producers can withhold unreliable peaks with
+`ThreadSpan::no_peak()` in `alloc_tracker` 0.7.12 or later. Hold the returned span
+across the measured iterations:
+
+```rust
+let _span = operation.measure_thread().no_peak().iterations(n);
+// Run the measured iterations before `_span` is dropped.
+```
+
+This suppresses the operation's peak measurement while preserving allocated bytes
+and allocation counts. Missing peaks remain absent rather than becoming zero.
+
 ### Workflow configuration
 
 All reusable workflows require the Azure identifiers as strings. Backfill requires
