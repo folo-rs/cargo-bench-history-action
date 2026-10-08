@@ -11,6 +11,14 @@ and storage-key helpers, drives the main executable with argument vectors, and
 reuses the existing evidence and publication implementations. Long-running tool
 execution streams its diagnostics rather than accumulating benchmark logs.
 
+Analysis ignore configuration belongs to the pinned Rust tools. The core reads
+`[ignore].benchmarks`, matches literal case-sensitive qualified benchmark ID
+prefixes and filters metric series before change detection. Rust reports the
+ignored series as outside scope and retains the existing `nothing_in_scope` outcome
+when every selected series is ignored. PowerShell and the workflows forward the
+configuration path unchanged; they do not parse the ignore list, filter collection
+or translate report outcomes.
+
 The pinned Rust tools own the full Markdown report's Coverage listing, the Insights
 help link and coverage-warning wording. PowerShell passes report paths unchanged
 and does not append or rewrite report content.
