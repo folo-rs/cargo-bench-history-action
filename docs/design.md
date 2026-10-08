@@ -50,6 +50,18 @@ The internal report namespace follows the core's canonical storage project ident
 It has no consumer override. Source/configuration inputs and process arguments remain
 data, not interpolated shell programs.
 
+### Analysis ignore configuration
+
+The optional `[ignore].benchmarks` list in `.cargo/bench_history.toml` or the
+selected configuration file uses literal, case-sensitive qualified benchmark ID
+prefixes. It applies to history and PR analysis before change detection, not to
+collection, backfill or raw inspection. Ignored measurements remain available.
+
+Reports disclose ignored metric series as outside scope. Ignoring every selected
+series produces the existing `nothing_in_scope` outcome. Action inputs and outcome
+vocabulary remain unchanged; package exclusions still control collection rather
+than analysis-only filtering.
+
 ### Peak-memory analysis
 
 Available `alloc_tracker` peak outstanding-byte measurements participate in history

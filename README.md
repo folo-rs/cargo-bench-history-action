@@ -92,6 +92,21 @@ A separate store-based analysis of the same commit can therefore differ from the
 workflow report. Later writes to storage do not change the report's selected
 current measurements.
 
+### Ignore noisy benchmarks in analysis
+
+Add an optional `[ignore]` table with a `benchmarks` array to
+`.cargo/bench_history.toml`, or to the file selected by `config`. Each entry is a
+literal, case-sensitive prefix of a qualified benchmark ID, not a glob or regular
+expression.
+
+Matching benchmarks remain collected and available for raw inspection, but history
+and PR analysis exclude their metric series before detecting changes. Reports
+disclose the ignored series as outside scope. If all selected series are ignored,
+the analysis outcome is `nothing_in_scope`.
+
+This configuration needs no action input. Unlike the workflow's `exclude` input,
+which excludes packages from collection, it preserves the underlying measurements.
+
 ### Peak-memory analysis
 
 Available `alloc_tracker` peak outstanding-byte measurements participate in history
