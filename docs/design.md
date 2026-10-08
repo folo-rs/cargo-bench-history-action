@@ -24,6 +24,11 @@ Analysis writes reports but never posts them. Publication consumes the summary a
 JSON from the same successful analysis and validates the expected/completed platforms.
 Findings remain advisory; execution failures fail the step.
 
+Published reports link directly to the Insights guide for interpretation. Coverage
+details appear at the end of the full Markdown report and in the JSON report;
+coverage warnings identify those locations rather than implying the abbreviated
+summary includes the listing.
+
 Inputs inapplicable to the selected command are errors. `working-directory` selects
 the measured/configuration checkout and defaults to the caller's working directory.
 It is distinct from `source-path`, which supplies the Folo checkout used to build tools.
