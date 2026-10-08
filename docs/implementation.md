@@ -11,6 +11,10 @@ and storage-key helpers, drives the main executable with argument vectors, and
 reuses the existing evidence and publication implementations. Long-running tool
 execution streams its diagnostics rather than accumulating benchmark logs.
 
+The pinned Rust tools own the full Markdown report's Coverage listing, the Insights
+help link and coverage-warning wording. PowerShell passes report paths unchanged
+and does not append or rewrite report content.
+
 Peak outstanding-byte ingestion, default analysis and missing-peak handling belong
 to the pinned Rust tools. Producer-side `ThreadSpan::no_peak()` belongs to
 `alloc_tracker`; the action neither filters metrics nor adds an opt-in flag.
