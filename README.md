@@ -80,6 +80,11 @@ issue need exist until findings appear. Clean updates leave an existing issue op
 inconclusive evidence cannot clear findings. Execution failures remain failures,
 including when surviving platforms produce a useful qualified report.
 
+The report's **How to read this report** link opens the
+[Insights guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
+Coverage details are at the end of the full `report.md` and in `report.json`,
+not in the abbreviated `summary.md`.
+
 Reports use only the exact measurements collected by this workflow's selected jobs
 as current data. The latest executed job for each platform supersedes its earlier
 executions; a failed retry cannot reuse an older success, while an untouched

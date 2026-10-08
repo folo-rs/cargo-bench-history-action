@@ -19,6 +19,10 @@ when every selected series is ignored. PowerShell and the workflows forward the
 configuration path unchanged; they do not parse the ignore list, filter collection
 or translate report outcomes.
 
+The pinned Rust tools own the full Markdown report's Coverage listing, the Insights
+help link and coverage-warning wording. PowerShell passes report paths unchanged
+and does not append or rewrite report content.
+
 Peak outstanding-byte ingestion, default analysis and missing-peak handling belong
 to the pinned Rust tools. Producer-side `ThreadSpan::no_peak()` belongs to
 `alloc_tracker`; the action neither filters metrics nor adds an opt-in flag.
