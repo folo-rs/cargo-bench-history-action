@@ -20,8 +20,12 @@ configuration path unchanged; they do not parse the ignore list, filter collecti
 or translate report outcomes.
 
 The pinned Rust tools own the full Markdown report's Coverage listing, the Insights
-help link and coverage-warning wording. PowerShell passes report paths unchanged
-and does not append or rewrite report content.
+help link and the conditional full-report pointer in the judged-series summary
+bullet. The companion uses the core summary's heading and visible commit
+attribution for completed GitHub issue and PR reports without adding duplicates.
+Incomplete in-scope series do not produce a coverage warning; missing-platform and
+staleness warnings remain Rust-owned. PowerShell passes report paths unchanged and
+does not append or rewrite report content.
 
 Peak outstanding-byte ingestion, default analysis and missing-peak handling belong
 to the pinned Rust tools. Producer-side `ThreadSpan::no_peak()` belongs to
