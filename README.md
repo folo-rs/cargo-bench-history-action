@@ -116,6 +116,20 @@ the analysis outcome is `nothing_in_scope`.
 This configuration needs no action input. Unlike the workflow's `exclude` input,
 which excludes packages from collection, it preserves the underlying measurements.
 
+### Accepted benchmark changes
+
+A blessing records acceptance of a benchmark change. History and PR analysis honor
+persisted blessings across their selected engine, target-triple and machine-key
+scope, including partitions without a measurement at the acceptance commit.
+Unrestricted scopes also cover future matching partitions. Existing partition-local
+blessings remain effective within their original restrictions.
+
+Manage acceptance through the
+[`bless`](https://folo-rs.github.io/folo/cargo-bench-history/commands/bless.html) and
+[`unbless`](https://folo-rs.github.io/folo/cargo-bench-history/commands/unbless.html)
+CLI commands. The action reads these records during analysis; it has no blessing
+mutation command or additional scope input.
+
 ### Peak-memory analysis
 
 Available `alloc_tracker` peak outstanding-byte measurements participate in history

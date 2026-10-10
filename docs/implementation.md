@@ -19,6 +19,13 @@ when every selected series is ignored. PowerShell and the workflows forward the
 configuration path unchanged; they do not parse the ignore list, filter collection
 or translate report outcomes.
 
+The pinned main tool owns project-level blessing records, logical scope matching
+and compatibility with legacy partition-local records. History, branch-base
+evidence and exact-current collection analysis use the same persisted acceptance
+scope. The tool's CLI owns mutation defaults, scope inspection and complete-scope
+deletion safeguards. PowerShell and the workflows neither interpret blessing
+records nor derive acceptance scope from the collection matrix or executing runner.
+
 The pinned Rust tools own the full Markdown report's Coverage listing, the Insights
 help link and the conditional full-report pointer in the judged-series summary
 bullet. The companion uses the core summary's heading and visible commit

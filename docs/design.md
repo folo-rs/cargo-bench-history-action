@@ -70,6 +70,18 @@ series produces the existing `nothing_in_scope` outcome. Action inputs and outco
 vocabulary remain unchanged; package exclusions still control collection rather
 than analysis-only filtering.
 
+### Accepted benchmark changes
+
+A blessing records acceptance of a benchmark change. History and PR analysis honor
+project-level blessings with independent engine, target-triple and machine-key
+restrictions, including partitions without a measurement at the acceptance commit.
+Unrestricted scopes include future matching partitions. Legacy partition-local
+records retain their original restrictions.
+
+The main tool's CLI owns creation, scope inspection and complete-scope deletion.
+The action consumes persisted acceptance during analysis without exposing mutation
+commands or additional scope inputs.
+
 ### Peak-memory analysis
 
 Available `alloc_tracker` peak outstanding-byte measurements participate in history
