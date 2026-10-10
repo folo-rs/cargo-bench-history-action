@@ -83,7 +83,11 @@ including when surviving platforms produce a useful qualified report.
 The report's **How to read this report** link opens the
 [Insights guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
 Coverage details are at the end of the full `report.md` and in `report.json`,
-not in the abbreviated `summary.md`.
+not in the abbreviated `summary.md`. When some in-scope metric series cannot be
+judged, the judged-series summary bullet includes "(see full report for details)"
+rather than a warning. Missing-platform and staleness warnings remain separate.
+Completed GitHub issue and PR reports present the analysis heading and commit
+attribution in the summary without repeating them around it.
 
 Reports use only the exact measurements collected by this workflow's selected jobs
 as current data. The latest executed job for each platform supersedes its earlier
