@@ -11,6 +11,7 @@ BeforeAll {
     $script:root = Split-Path $PSScriptRoot -Parent
     $script:rootAction = Get-Content (Join-Path $root 'action.yml') -Raw | ConvertFrom-Yaml
     $script:contextAction = Get-Content (Join-Path $root '.github\actions\workflow-tools\action.yml') -Raw | ConvertFrom-Yaml
+    $script:resultsAction = Get-Content (Join-Path $root '.github\actions\workflow-results\action.yml') -Raw | ConvertFrom-Yaml
     $script:manifest = Read-ActionManifest (Join-Path $root 'release.json')
 
     function Test-SelectionCondition {
@@ -99,6 +100,7 @@ Describe 'Reusable <flow> workflow contracts' -ForEach @(
                 $metadata = switch ($step['uses']) {
                     '$/' { $rootAction }
                     '$/.github/actions/workflow-tools' { $contextAction }
+                    '$/.github/actions/workflow-results' { $resultsAction }
                 }
                 if ($null -eq $metadata) { continue }
                 foreach ($key in $step.with.Keys) {
@@ -137,6 +139,7 @@ Describe 'Reusable <flow> workflow contracts' -ForEach @(
                 $metadata = switch ($steps[$id]['uses']) {
                     '$/' { $rootAction }
                     '$/.github/actions/workflow-tools' { $contextAction }
+                    '$/.github/actions/workflow-results' { $resultsAction }
                 }
                 if ($null -ne $metadata) { $metadata.outputs.ContainsKey($output) | Should -BeTrue }
             }
@@ -517,16 +520,17 @@ Describe 'Historical backfill graph behavior' {
         $work.strategy['fail-fast'] | Should -BeFalse
     }
 
-    It 'exposes only a preparation and historical collection graph without reporting contracts' {
-        $backfill.jobs.Keys | Sort-Object | Should -Be @('backfill', 'prepare')
+    It 'keeps completion evidence separate from analysis and publication' {
+        $backfill.jobs.Keys | Sort-Object | Should -Be @('backfill', 'prepare', 'result')
         $backfill.on.workflow_call.ContainsKey('outputs') | Should -BeFalse
         foreach ($job in $backfill.jobs.Values) {
             foreach ($permission in $job.permissions.Keys) {
-                $permission | Should -BeIn @('contents', 'id-token')
+                $permission | Should -BeIn @('contents', 'id-token', 'actions')
             }
             foreach ($step in $job.steps) {
                 if ($step['uses']) {
-                    $step.uses | Should -BeIn @('$/', '$/.github/actions/workflow-tools')
+                    $step.uses | Should -BeIn @('$/', '$/.github/actions/workflow-tools',
+                        '$/.github/actions/workflow-results', 'actions/upload-artifact@v7', 'actions/download-artifact@v8')
                 }
             }
         }
@@ -537,7 +541,66 @@ Describe 'Historical backfill graph behavior' {
         $commands[0].with.ContainsKey('packages') | Should -BeFalse
         $commands[0].with.ContainsKey('context') | Should -BeFalse
         $prepare.outputs.Keys | Sort-Object |
-            Should -Be @('expected-platforms', 'from', 'has-work', 'instance', 'matrix', 'skipped', 'to')
+            Should -Be @('expected-platforms', 'from', 'has-work', 'instance', 'matrix', 'no-work-reason', 'skipped', 'to')
+    }
+}
+
+Describe 'Actions result graph for <flow>' -ForEach @(
+    @{ flow = 'history' }, @{ flow = 'pr' }, @{ flow = 'backfill' }
+) {
+    BeforeAll {
+        $script:resultWorkflow = Get-Content (Join-Path $root ".github\workflows\$flow.yml") -Raw | ConvertFrom-Yaml
+    }
+
+    It 'uses structural contexts and an installation-independent implementation path' {
+        foreach ($job in $resultWorkflow.jobs.Values) {
+            foreach ($step in $job.steps | Where-Object { $_['uses'] -ceq '$/.github/actions/workflow-results' }) {
+                $step.if | Should -BeExactly 'always()'
+                $step.with.needs | Should -BeExactly '${{ toJSON(needs) }}'
+                $step.with.steps | Should -BeExactly '${{ toJSON(steps) }}'
+            }
+            foreach ($step in $job.steps | Where-Object { $_['run'] }) {
+                $step.run | Should -Not -Match '\$\{\{'
+            }
+        }
+        $entry = $resultsAction.runs.steps[0]
+        $entry.env.CBH_ACTION_PATH | Should -BeExactly '${{ github.action_path }}'
+        $entry.env.CBH_RESULT_INPUTS | Should -BeExactly '${{ toJSON(inputs) }}'
+        $entry.run | Should -Not -Match 'steps.context|GITHUB_WORKSPACE'
+    }
+
+    It 'never makes a card conditional on publication or gives the finalizer publication permission' {
+        $resultWorkflow.jobs.result.if | Should -Not -Match 'inputs.publish|success\(\)'
+        foreach ($permission in $resultWorkflow.jobs.result.permissions.Values) {
+            $permission | Should -BeExactly 'read'
+        }
+        if ($flow -cne 'backfill') {
+            $resultWorkflow.jobs.result.if | Should -BeExactly "always() && needs.analyze.result == 'skipped'"
+            $finalizers = @($resultWorkflow.jobs.analyze.steps |
+                    Where-Object { $_['uses'] -ceq '$/.github/actions/workflow-results' })
+            $finalizers.Count | Should -Be 1
+            $finalizers[0].with.stage | Should -BeExactly 'analysis'
+            $resultWorkflow.jobs.analyze.steps[-1] | Should -Be $finalizers[0]
+        }
+    }
+
+    It 'retains immutable backfill attempts independently of successful command outputs' {
+        if ($flow -cne 'backfill') { return }
+        $work = $resultWorkflow.jobs.backfill
+        $work.name | Should -BeExactly 'cbh-backfill:${{ needs.prepare.outputs.instance }}:${{ matrix.platform }}'
+        $command = @($work.steps | Where-Object { $_['id'] -ceq 'backfill' })[0]
+        $command.with['completion-output'] | Should -BeExactly '${{ steps.context.outputs.completion-file }}'
+        $evidence = @($work.steps | Where-Object { $_['id'] -ceq 'evidence' })[0]
+        $evidence.with['completion-file'] | Should -BeExactly $command.with['completion-output']
+        $upload = @($work.steps | Where-Object { $_['uses'] -like 'actions/upload-artifact@*' })[0]
+        $upload.if | Should -BeExactly "always() && steps.evidence.outcome == 'success'"
+        $upload.with.name | Should -BeExactly 'cbh-backfill-completion-${{ needs.prepare.outputs.instance }}-${{ matrix.platform }}-${{ github.run_attempt }}'
+        $upload.with.ContainsKey('overwrite') | Should -BeFalse
+        $download = @($resultWorkflow.jobs.result.steps | Where-Object { $_['uses'] -like 'actions/download-artifact@*' })[0]
+        $download.with['run-id'] | Should -BeExactly '${{ github.run_id }}'
+        $download.with['github-token'] | Should -BeExactly '${{ github.token }}'
+        $download.with.ContainsKey('merge-multiple') | Should -BeFalse
+        $download.with.pattern | Should -BeExactly 'cbh-backfill-completion-${{ needs.prepare.outputs.instance }}-*'
     }
 }
 

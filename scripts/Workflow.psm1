@@ -82,6 +82,7 @@ function Initialize-WorkflowContext {
         'tools-root' = Join-Path $runRoot 'tools'
         'state-path' = Join-Path $runRoot 'workflow.json'
         'receipt-file' = Join-Path $receiptDirectory 'receipt.json'
+        'completion-file' = Join-Path $runRoot 'completion.json'
         'receipts-directory' = $receiptsDirectory
         'current-collection-directory' = Join-Path $runRoot 'current-collections'
         'cache-directory' = $cacheDirectory
@@ -359,4 +360,4 @@ function Invoke-WorkflowProcess {
     if ($CaptureOutput) { return $output }
 }
 
-Export-ModuleMember -Function Initialize-WorkflowContext, Install-WorkflowTool, Invoke-WorkflowOperation
+Export-ModuleMember -Function Initialize-WorkflowContext, Install-WorkflowTool, Invoke-WorkflowOperation, Invoke-WorkflowProcess

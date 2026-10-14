@@ -114,6 +114,7 @@ jobs:
       to: ${{ steps.prepare.outputs.to }}
       skipped: ${{ steps.prepare.outputs.skipped }}
       has-work: ${{ steps.prepare.outputs.has-work }}
+      no-work-reason: ${{ steps.prepare.outputs.no-work-reason }}
     steps:
       - name: Prepare implementation and caller context
         id: context
@@ -142,6 +143,7 @@ jobs:
   backfill:
     needs: prepare
     if: needs.prepare.outputs.skipped == 'false' && needs.prepare.outputs.has-work == 'true'
+    name: cbh-backfill:${{ needs.prepare.outputs.instance }}:${{ matrix.platform }}
     runs-on: ${{ matrix.platform }}
     # Exceptional watchdog, not a successful stop; max-commits bounds normal work.
     # Ref: ../../docs/design.md#historical-backfill.
@@ -171,6 +173,7 @@ jobs:
           config: ${{ inputs.config }}
           benchmark-setup: 'true'
       - name: Backfill historical workspace benchmarks
+        id: backfill
         uses: $/
         with:
           command: backfill
@@ -181,6 +184,7 @@ jobs:
           from: ${{ needs.prepare.outputs.from }}
           to: ${{ needs.prepare.outputs.to }}
           max-commits: ${{ inputs.max-commits }}
+          completion-output: ${{ steps.context.outputs.completion-file }}
           exclude: ${{ inputs.exclude }}
           bench: ${{ inputs.bench }}
           best-of: ${{ inputs.best-of }}
@@ -190,3 +194,74 @@ jobs:
           rustflags: ${{ inputs.rustflags }}
           ignore-errors: ${{ inputs.ignore-errors }}
           on-existing: skip
+      - name: Retain this attempt's completion evidence
+        id: evidence
+        if: always()
+        uses: $/.github/actions/workflow-results
+        with:
+          stage: backfill-evidence
+          needs: ${{ toJSON(needs) }}
+          steps: ${{ toJSON(steps) }}
+          platform: ${{ matrix.platform }}
+          completion-file: ${{ steps.context.outputs.completion-file }}
+      - name: Upload completion even after a stopping benchmark failure
+        if: always() && steps.evidence.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cbh-backfill-completion-${{ needs.prepare.outputs.instance }}-${{ matrix.platform }}-${{ github.run_attempt }}
+          path: ${{ steps.evidence.outputs.evidence-directory }}
+          if-no-files-found: error
+
+  result:
+    needs: [prepare, backfill]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - id: context
+        if: needs.prepare.result == 'success' && needs.prepare.outputs.skipped == 'false'
+        uses: $/.github/actions/workflow-tools
+        with:
+          head: ${{ needs.prepare.outputs.to || github.event.pull_request.head.sha || github.sha }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+      - name: Retain preparation alongside diagnostic completion bundles
+        if: always() && needs.prepare.outputs.has-work == 'true'
+        shell: pwsh
+        env:
+          CBH_PREPARATION: ${{ toJSON(needs.prepare) }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $directory = Join-Path $env:RUNNER_TEMP 'cbh-backfill-completions'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          $env:CBH_PREPARATION | Set-Content -LiteralPath (Join-Path $directory 'preparation.json')
+      - name: Download immutable completion attempts
+        if: always() && needs.prepare.outputs.has-work == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cbh-backfill-completion-${{ needs.prepare.outputs.instance }}-*
+          path: ${{ runner.temp }}/cbh-backfill-completions
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+      - name: Upload the diagnostic completion bundle
+        id: bundle
+        if: always() && needs.prepare.outputs.has-work == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cbh-backfill-result-${{ needs.prepare.outputs.instance }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cbh-backfill-completions
+          if-no-files-found: error
+      - name: Write the collection-only Actions result card
+        if: always()
+        uses: $/.github/actions/workflow-results
+        with:
+          stage: backfill
+          needs: ${{ toJSON(needs) }}
+          steps: ${{ toJSON(steps) }}
+          companion: ${{ steps.context.outputs.companion }}
+          artifacts-directory: ${{ runner.temp }}/cbh-backfill-completions

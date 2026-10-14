@@ -86,6 +86,12 @@ The companion validates a nonzero Rust `usize`, rejects nonempty values on other
 commands and forwards `--max-commits` to the core backfill command. PowerShell owns
 neither this validation nor attempt accounting.
 
+`completion-output` is an optional backfill-only string. The companion resolves
+relative paths against the measured directory and forwards the core flag.
+Reusable backfill uses a new absolute `completion-file` allocated during layout
+under the job-local external root. The workflow retains that path before invoking
+the root action; failure does not require a success-shaped action output.
+
 `rustflags` remains an opaque runtime string in this handoff. Workflows forward it
 only to root `collect` and `backfill` invocations, not to preparation, setup,
 installation, analysis or publication. PowerShell leaves both ambient flag
@@ -227,7 +233,8 @@ common collection options, with `on-existing: skip`; rolling inputs never reach
 the explicit-range executor. `max-commits` goes only to execution, not preparation
 or setup. First-parent validity, traversal and the per-platform attempt budget
 stay in the main executable. Its normal summary describes processed and deferred
-work; the graph has no receipt, analysis, artifact or sink jobs.
+work. The graph retains completion artifacts and a result-card job without a
+collection receipt, analysis or publication phase.
 
 Backfill's `cbh-backfill-run` workflow queue groups repository/configuration
 locations independently of event, SHA or run identity. Its `cbh-backfill-work`
@@ -266,6 +273,46 @@ otherwise they use the current attempt, with the companion enforcing exact owner
 A failed history collection can both preserve a useful partial report and file its
 separate workflow-failure alert.
 
+### Workflow result cards
+
+The release-owned `workflow-results` composite receives `toJSON(needs)` and
+`toJSON(steps)` as environment data. It resolves its scripts from `github.action_path`,
+independently of the caller's checkout and failed preparation/install steps.
+`WorkflowResults.psm1` maps explicit execution and publication process outcomes to
+the strict offline `workflow-summary` input. It neither parses report prose nor
+derives a benchmark verdict. The Rust companion validates the original analysis
+JSON and projects its checked disposition, series coverage and platform evidence.
+
+History and PR finalize once inside the analysis job with `always()`, after report
+upload/publication. This retains valid local analysis when either later operation
+fails. The same reconciled expected/completed platform lists and frozen analysis
+SHA feed publication and the card. No synthetic observed-head value claims
+freshness. A mutually exclusive terminal job handles skipped analysis, empty
+scope, event-policy skips and failed preparation independently of `publish`.
+Publication status describes observed requests, not a guarantee of a new post.
+
+Backfill uploads immutable `cbh-backfill-completion-<project>-<platform>-<attempt>`
+bundles even after failed execution. Each contains an identity envelope with
+repository, canonical project, run, attempt, platform and frozen endpoints, plus
+the original completion file when present. The companion owns completion schema,
+count consistency and stop-reason validation; PowerShell never scrapes CLI counts.
+The result job downloads run-wide attempts and preserves a diagnostic aggregate
+bundle, including preparation even when no completion exists.
+
+The authenticated Rust `backfill-jobs` projection selects executed attempts for
+`cbh-backfill:<project>:<platform>` job names using the existing job-history policy.
+PowerShell matches each selected identity to its exact downloaded envelope and
+passes the completion path unchanged to offline `workflow-summary`. Older
+completions cannot replace failed, cancelled or skipped retries. The aggregate
+artifact can retain superseded diagnostic files without selecting them as current
+evidence. Missing selected files remain unavailable.
+
+Only the final append point writes `GITHUB_STEP_SUMMARY`. Missing companion or
+renderer failure produces a minimal execution-only fallback with stage/log
+diagnostics and no analysis/coverage/count claims. A renderer error still fails
+the step; original job failures and logs remain intact. Hard cancellation can
+stop the runner before an `always()` finalizer executes.
+
 ## Validation and release boundaries
 
 Pester covers installer argument construction, exact manifest selection, cache
@@ -281,6 +328,13 @@ Source-path compatibility evidence covers the real collection snapshot,
 `--collection-file` receipt, `--current-collection-dir` reconciliation and
 root-action `current-collections` analysis handoff. Installing binaries alone
 does not establish this workflow contract.
+
+Source canaries also run the real offline result renderer through the production
+adapter for findings, clean, partial, insufficient, empty, failed, skipped and
+missing-platform evidence, including publication disabled. The real analyzer
+report is passed unchanged. Root-companion backfill probes use the fake benchmark
+engine to require bounded completion and final failed-attempt accounting while
+preserving the nonzero exit. Missing-platform completion counts remain unknown.
 
 The release job operates after the matrix availability gate and uses the runner's
 PowerShell, Git and GitHub CLI to reconcile repository refs/releases. This is
