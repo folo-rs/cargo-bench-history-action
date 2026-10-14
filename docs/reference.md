@@ -79,8 +79,7 @@ Unrestricted scopes also cover future matching partitions. Existing partition-lo
 blessings remain effective within their original restrictions.
 
 Manage acceptance through the
-[`bless`](https://folo-rs.github.io/folo/cargo-bench-history/commands/bless.html) and
-[`unbless`](https://folo-rs.github.io/folo/cargo-bench-history/commands/unbless.html)
+[`bless` / `unbless`](https://folo-rs.github.io/folo/cargo-bench-history/commands/bless.html)
 CLI commands. The action reads these records during analysis; it has no blessing
 mutation command or additional scope input.
 
