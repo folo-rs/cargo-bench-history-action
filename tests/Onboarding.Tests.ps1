@@ -133,7 +133,7 @@ Describe 'Copyable runner prerequisite hook' {
         }
     }
 
-    It 'selects the compiler for measured processes on <platform>' -ForEach @(
+    It 'selects the current-collection compiler on <platform>' -ForEach @(
         @{ platform = 'Linux' }, @{ platform = 'Windows' }, @{ platform = 'macOS' }
     ) {
         $env:RUNNER_OS = $platform

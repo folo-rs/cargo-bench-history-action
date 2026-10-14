@@ -327,8 +327,10 @@ optional Linux engine setup, exact argument vectors and failure propagation.
 These checks do not install tools or prove published binary availability.
 
 The caller-owned setup recipe lives at the same fixed path consumers copy. It
-exports `RUSTUP_TOOLCHAIN` for measured and historical child processes, rather than
-using an invocation-directory override or generating files in that checkout.
+exports `RUSTUP_TOOLCHAIN` for current collection, rather than using an
+invocation-directory override or generating files in that checkout. Core backfill
+removes launcher `RUSTUP_TOOLCHAIN` and `CARGO` overrides from historical benchmark
+and probe commands so each checkout resolves its own toolchain.
 Repository variables select the caller's compiler and optional Gungraun runner;
 neither variable overrides the action manifest's tool pins.
 

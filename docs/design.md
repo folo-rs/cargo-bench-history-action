@@ -21,8 +21,10 @@ nonsecret variables, optional runner prerequisites, history collection, result
 evidence, bounded baseline replay and PR comparison. The detailed input/output
 reference and custom root-action graph remain separate from this starter.
 
-The setup recipe selects a caller-pinned compiler through runner-wide environment
-state. Its optional Gungraun setup requires Linux and a runner version matching the
+The setup recipe selects a caller-pinned compiler for current collection through
+runner-wide environment state. Historical backfill clears launcher toolchain
+overrides and resolves the historical checkout's toolchain. The optional Gungraun
+setup requires Linux and a runner version matching the
 benchmark dependency. It does not assume nightly or system-engine dependencies for
 every Rust project. The fixed hook belongs to the invocation checkout and exposes
 no measured-checkout input or per-historical-commit preparation hook.

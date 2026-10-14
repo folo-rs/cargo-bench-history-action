@@ -38,7 +38,8 @@ runs:
         $arguments = @('toolchain', 'install', $toolchain, '--profile', 'minimal', '--no-self-update')
         & rustup @arguments
         if ($LASTEXITCODE -ne 0) { throw 'Cannot install the benchmark Rust toolchain.' }
-        # An invocation-directory rustup override does not select historical worktrees.
+        # Select current collection across its isolated checkout. Backfill clears this
+        # launcher override and resolves each historical checkout's own toolchain.
         $env:RUSTUP_TOOLCHAIN = $toolchain
         "RUSTUP_TOOLCHAIN=$toolchain" | Add-Content -LiteralPath $env:GITHUB_ENV
 

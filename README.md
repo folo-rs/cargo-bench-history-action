@@ -83,8 +83,12 @@ the executable [setup action](.github/actions/bench-history-setup/action.yml) to
 the **same path in your repository**, `.github/actions/bench-history-setup/action.yml`.
 Set repository variable `BENCHMARK_RUST_TOOLCHAIN` to your tested exact Rust version,
 or a dated nightly if your benchmarks actually require nightly. The recipe installs
-that toolchain and selects it for child measurement processes. It does not assume
-every Rust project needs nightly.
+that toolchain and selects it for current collection. It does not assume every
+Rust project needs nightly. Historical backfill clears the launcher's
+`RUSTUP_TOOLCHAIN` and `CARGO` overrides: each historical checkout resolves its own
+toolchain, including its committed `rust-toolchain.toml`. The hook does not
+override those historical pins. Choose a compatible range and see
+[backfill toolchain configuration](https://folo-rs.github.io/folo/cargo-bench-history/commands/backfill.html#toolchain-and-measurement-configuration).
 
 For Gungraun, also set `BENCHMARK_GUNGRAUN_VERSION` to the exact `gungraun` version
 used by your benchmarks. The recipe installs a matching `gungraun-runner` and the
@@ -96,7 +100,8 @@ Use a historical range compatible with that engine/runner version.
 The hook is fixed, takes no checkout-path inputs, and runs from the **invocation
 checkout**, which supplies configuration and setup code. Current/PR measurements
 run in a separate frozen checkout; backfill creates historical worktrees.
-Runner-wide tools, `GITHUB_PATH` and `GITHUB_ENV` changes reach subsequent work.
+Runner-wide tools and ordinary `GITHUB_PATH`/`GITHUB_ENV` changes reach subsequent
+work, subject to backfill's toolchain isolation described above.
 Generating files or running `cargo build` in the invocation root does **not** prepare
 the measured worktree. If a project needs checkout-specific generation, use the
 [root action in a caller-owned graph](docs/reference.md#advanced-root-action-reference);
