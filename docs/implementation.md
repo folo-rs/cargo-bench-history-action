@@ -339,6 +339,9 @@ missing-platform evidence, including publication disabled. The real analyzer
 report is passed unchanged. Root-companion backfill probes use the fake benchmark
 engine to require bounded completion and final failed-attempt accounting while
 preserving the nonzero exit. Missing-platform completion counts remain unknown.
+An authenticated source probe uses a separate namespace without backfill jobs to
+exercise native job discovery and retained selection JSON. It then clears token
+environment variables before the offline adapter renders unavailable accounting.
 
 The release job operates after the matrix availability gate and uses the runner's
 PowerShell, Git and GitHub CLI to reconcile repository refs/releases. This is
