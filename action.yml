@@ -48,11 +48,11 @@ inputs:
   cache:
     description: Cloud measurement cache directory; conflicts with local-path.
   context:
-    description: Commit context for collection, backfill or analysis.
+    description: Commit context for history or PR analysis; defaults to the measured checkout HEAD.
   base:
     description: Base commit for PR analysis.
   since:
-    description: History analysis or backfill window.
+    description: History analysis look-back window.
   from:
     description: Start of the backfill range.
   to:
@@ -78,7 +78,7 @@ inputs:
   completed-platforms:
     description: Comma-separated platforms with confirmed successful collection.
   pr-number:
-    description: Pull request number for PR analysis or comment publication.
+    description: Pull request number for comment publication.
   head:
     description: Frozen head commit for preflight, empty-scope or failure publication.
   run-id:
@@ -115,7 +115,7 @@ outputs:
     description: Whether completed collection platforms omit an expected platform.
     value: ${{ steps.invoke.outputs.partial-platform-coverage }}
   regressions:
-    description: Whether the analysis contains regressions.
+    description: Nonnegative regression count from successful analysis, emitted as integer text.
     value: ${{ steps.invoke.outputs.regressions }}
   report-markdown:
     description: Full Markdown report path.

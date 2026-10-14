@@ -1,22 +1,110 @@
 # Benchmark history action
 
-Reusable workflows collect or backfill benchmark history and report changes without requiring
-each repository to maintain the collection matrix, receipt handoff and publication
-job graph. The root composite action remains available for custom job graphs.
+Collect benchmark history, compare current measurements with comparable history,
+and read the result in GitHub Actions. Optional issue and PR updates bring findings
+to the conversation without making regressions a build failure.
 
-Reusable workflow callers require `actions: read`, including backfill, to select
-evidence from the correct executed attempts. This read permission is independent
-of issue/comment publication and is required with `publish: false`.
+Use the [ordered GitHub onboarding guide](https://folo-rs.github.io/folo/cargo-bench-history/github-automation.html)
+for the complete journey, [Read a report](https://folo-rs.github.io/folo/cargo-bench-history/appendix/reporting.html)
+for the production-generated report gallery, and [Investigate and accept](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html)
+for decisions about a finding. The [input/output and custom-workflow reference](docs/reference.md)
+keeps advanced composition separate from the starter below.
 
-## Start with the reusable workflows
+```mermaid
+flowchart LR
+    H[Historical collection or bounded backfill] --> S[Shared Azure history]
+    C[Current history or PR measurements] --> S
+    C --> E[Exact collection evidence]
+    S --> A[Analysis]
+    E --> A
+    A --> R[Actions card and report artifacts]
+    A --> P[Optional issue or PR comment]
+```
 
-Commit your benchmark-history configuration and provision its Azure store and
-federated identity using
-[`setup-azure`](https://folo-rs.github.io/folo/cargo-bench-history/commands/setup-azure.html).
-Set repository variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` to the deployment's
-managed-identity client ID and tenant ID.
+Backfill only collects history; run history or PR analysis afterward.
 
-Create a history caller:
+## Minimal starter
+
+### Check your benchmarks and runners
+
+Start with an existing Rust package or workspace whose benchmarks run locally.
+Supported engines are Criterion, Callgrind through Gungraun, `alloc_tracker` and
+`all_the_time`; see [engine requirements](https://folo-rs.github.io/folo/cargo-bench-history/concepts/engines.html).
+The action does not create benchmarks or turn arbitrary test output into measurements.
+Root-package and single-crate repositories are supported: unknown or root ownership
+conservatively selects the full workspace rather than discarding the package.
+
+Collection defaults to `ubuntu-latest` (x64 Linux) and `windows-latest` (x64 Windows),
+with **all Cargo features enabled**. Apple Silicon `macos-latest` is optional;
+Intel macOS is not a supported release target. Choose only platforms your benchmarks
+and dependencies support. The reusable workflows require GitHub.com runner 2.336.0
+or later, PowerShell 7.6 or later, Cargo and the project's Rust/system prerequisites.
+The [release manifest](release.json) is the authority for native tool targets.
+
+For incompatible feature combinations, set `all-features: false` and choose
+`features` and, if needed, `no-default-features`. Restrict Cargo benchmark targets
+with `bench` and packages with `exclude`; there is no reusable-workflow package-list
+or Rust target-triple override. `platforms` selects supported native runners, not
+cross-compilation. Keep these choices, compiler flags, compiler and engine versions
+the same in history, PR and backfill callers: they form your measurement protocol.
+
+### Commit configuration and connect Azure
+
+Commit `.cargo/bench_history.toml` with a stable project identity and your selected
+storage names. Replace these example values with your deployment's values:
+
+```toml
+[project]
+id = "my-project"
+
+[storage.azure]
+account = "myhistoryaccount"
+container = "bench-history"
+```
+
+Follow the canonical
+[`setup-azure` guide](https://folo-rs.github.io/folo/cargo-bench-history/commands/setup-azure.html)
+to install the CLI prerequisites, provision or reuse storage and configure
+short-lived federated access for your repository and history branch. Reconcile the
+committed account/container with the command's printed configuration.
+The examples below use `main`; change their branch names together with the
+deployment's trusted history branch.
+
+Under **Settings > Secrets and variables > Actions > Variables**, set
+`AZURE_CLIENT_ID` to the printed managed-identity **client** ID and `AZURE_TENANT_ID`
+to its tenant ID. These are nonsecret repository variables. Reusable callers pass
+them as inputs; do not add an `azure/login` job, static credentials, or duplicate
+checkout/full-history/environment preparation.
+
+### Prepare benchmark prerequisites
+
+If the runner already has all prerequisites, no hook is needed. Otherwise copy
+the executable [setup action](.github/actions/bench-history-setup/action.yml) to
+the **same path in your repository**, `.github/actions/bench-history-setup/action.yml`.
+Set repository variable `BENCHMARK_RUST_TOOLCHAIN` to your tested exact Rust version,
+or a dated nightly if your benchmarks actually require nightly. The recipe installs
+that toolchain and selects it for child measurement processes. It does not assume
+every Rust project needs nightly.
+
+For Gungraun, also set `BENCHMARK_GUNGRAUN_VERSION` to the exact `gungraun` version
+used by your benchmarks. The recipe installs a matching `gungraun-runner` and the
+Linux distribution's Valgrind package. Select `platforms: ubuntu-latest` in **all**
+callers for this recipe; it explicitly rejects the Gungraun setup on Windows and
+Apple Silicon macOS. Leave the variable unset for engines without this dependency.
+Use a historical range compatible with that engine/runner version.
+
+The hook is fixed, takes no checkout-path inputs, and runs from the **invocation
+checkout**, which supplies configuration and setup code. Current/PR measurements
+run in a separate frozen checkout; backfill creates historical worktrees.
+Runner-wide tools, `GITHUB_PATH` and `GITHUB_ENV` changes reach subsequent work.
+Generating files or running `cargo build` in the invocation root does **not** prepare
+the measured worktree. If a project needs checkout-specific generation, use the
+[root action in a caller-owned graph](docs/reference.md#advanced-root-action-reference);
+there is no per-historical-checkout hook to invent or configure.
+
+### Collect history and find the first result
+
+Commit `.github/workflows/benchmark-history.yml`:
 
 ```yaml
 name: Benchmark history
@@ -38,7 +126,82 @@ jobs:
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
-Create a PR caller:
+Push or dispatch on the trusted branch. Open **Actions > Benchmark history > the
+run > Summary**. The result card is independent of GitHub publication and remains
+available with `publish: false` or no findings issue. After successful analysis,
+the run's **Artifacts** section and card link to
+`bench-history-report-<project>-<run-id>-<attempt>` containing `summary.md`,
+`report.md` and `report.json`. PR reports use the `pr-bench-history-report-` prefix.
+Preparation/installation failures instead get execution-only diagnostics; hard
+cancellation can prevent even finalization.
+
+Read the card in this order:
+
+| Card evidence | What it establishes | Useful next action |
+| --- | --- | --- |
+| Execution succeeded | The selected work ran successfully, not that benchmarks are clean. | Read analysis and coverage. |
+| Insufficient or incomplete evidence | Some requested comparisons cannot be judged. | Inspect coverage reasons and comparable history. |
+| Nothing in scope | Analysis found no in-scope series; an empty prepared package scope instead runs no analysis. | Check target selection, exclusions and analysis ignore prefixes. |
+| Findings or clean disposition | A checked analysis result for the disclosed scope and coverage. | Read the report and its warnings, not just the regression count. |
+| Publication disabled or no new post | No GitHub write was requested, or lifecycle rules left posts unchanged. | Use the Actions artifact; no findings issue is required for a first run. |
+
+An empty findings array, zero regressions or a green Actions run does not prove
+healthy or complete evidence. A useful partial report can coexist with a failed
+platform job. An open issue is a separate lifecycle fact: an all-clear update
+leaves the rolling issue open.
+
+### Bootstrap a comparable baseline with bounded replay
+
+Use normal history pushes to accumulate distinct commits, or commit this manual
+caller as `.github/workflows/benchmark-backfill.yml` to seed an existing history:
+
+```yaml
+name: Backfill benchmark history
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: First historical commit
+        required: true
+        type: string
+      to:
+        description: Last historical commit
+        required: true
+        type: string
+jobs:
+  backfill:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v3
+    with:
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      from: ${{ inputs.from }}
+      to: ${{ inputs.to }}
+      # Start with a small cost budget, then inspect the completion card.
+      max-commits: '2'
+```
+
+Dispatch on the trusted branch with endpoints on one first-parent history whose
+benchmarks build under the selected protocol. The range is inclusive. Each platform
+attempts the newest missing commits, skips existing measurements without spending
+its budget, and reports deferred work. Rerun to continue; this is a commit budget,
+not a time limit. See the [backfill reference](docs/reference.md#backfill-historical-measurements)
+for rolling windows, queuing and completion artifacts.
+
+Backfill neither analyzes nor publishes. Run history again afterward and inspect
+judged coverage. Same-commit reruns do not create distinct historical observations.
+A number of calendar days or a minimum point count is not a reporting guarantee:
+the baseline must be comparable for the selected engine, target and machine.
+[Operations](https://folo-rs.github.io/folo/cargo-bench-history/operations.html)
+explains readiness, cost, protocol changes and retention decisions.
+
+### Add PR comparison and optional publication
+
+Commit `.github/workflows/benchmark-pr.yml`:
 
 ```yaml
 name: PR benchmark history
@@ -59,520 +222,47 @@ jobs:
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
-No package list is needed. History collects the workspace; PR preparation selects
-affected benchmark packages and their dependents automatically. The workflows own
-checkout, the platform matrix, rerun-safe collection, receipt reconciliation,
-analysis, report upload, publication and concurrency. The `closed` event cancels
-superseded PR work without starting another collection.
+No caller matrix or package list is needed. PR preparation selects affected
+benchmark packages and dependents, then applies exclusions. The `closed` event
+supersedes older PR work without new collection.
 
-Collection defaults to x64 Linux and Windows. Apple Silicon macOS is also supported;
-set `platforms: ubuntu-latest,windows-latest,macos-latest` in each caller's `with:`
-block to include it. The workspace's benchmarks and their dependencies must support
-the selected runners. Intel macOS is not a supported release target.
+History issues and PR comments are enabled by default. Add `publish: false` to
+either caller to disable **GitHub** report, lifecycle and alert writes. Collection,
+Azure reads/writes, analysis and artifacts continue. It does not reduce statically
+requested token permissions: retain the caller permissions shown above, including
+`actions: read`, even when publication is disabled.
 
-Under default GitHub settings, the platform restricts effective fork-PR
-`id-token` permission after YAML evaluation. Approval to run does not grant that
-permission. This server-enforced restriction prevents a default fork PR from
-minting the Azure assertion; the same-repository conditions select intended work
-and are not the authorization boundary. Nondefault write-token exceptions are
-outside this starter's assumptions.
+Fork-origin PR work is skipped. Under GitHub defaults, the platform removes effective
+fork-PR `id-token` capability after YAML evaluation; approval does not elevate it.
+That server-enforced restriction, not an editable `if`, is the authorization barrier.
+Nondefault write-token exceptions are outside this starter. Do not use
+`pull_request_target` to run untrusted code with storage or publication access.
 
-Reports are uploaded as `bench-history-report-<project>-<run-id>-<attempt>` or
-`pr-bench-history-report-<project>-<run-id>-<attempt>`, containing `report.md`,
-`report.json` and `summary.md`. A first history may be inconclusive, and no rolling
-issue need exist until findings appear. Clean updates leave an existing issue open;
-inconclusive evidence cannot clear findings. Execution failures remain failures,
-including when surviving platforms produce a useful qualified report.
+## Operate and upgrade
 
-The Actions run summary shows a result card even when `publish: false` or no
-issue/comment is created. It separates execution status, the analysis result,
-judged and platform coverage, and publication status, with artifact/run links and
-a next action. A successful publication request may leave posts unchanged under
-the lifecycle rules. An absent report is not a clean result.
-
-Preparation and installation failures receive an execution-only card with a
-stage/log link; they do not supply a benchmark verdict. Finalization needs a
-running job, so hard cancellation can prevent a card from being written.
-
-The report's **How to read this report** link opens the
-[Insights guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
-Findings and judged coverage appear together, including unjudged-reason counts
-and warnings when some in-scope series cannot be judged. Complete coverage details
-remain at the end of `report.md` and in `report.json`. Missing-platform and
-comparison-base lag warnings remain distinct.
-Completed GitHub issue and PR reports present the analysis heading and commit
-attribution in the summary without repeating them around it.
-
-The condensed summary uses a capped findings table with readable units and
-platform labels. Expandable evidence contains charts and shell-labelled inspection
-commands; the collection package inventory is also expandable. Chart legends explain
-the orientation, scale, gaps and comparison context. Inspection commands retain
-the report's query and measurement selectors but inspect stored data, not the exact
-current collection snapshots. Full Markdown retains every finding, and JSON retains
-the original metric identifiers, numeric units and precision.
-
-Reports use only the exact measurements collected by this workflow's selected jobs
-as current data. The latest executed job for each platform supersedes its earlier
-executions; a failed retry cannot reuse an older success, while an untouched
-successful platform remains eligible. Comparable stored history supplies baselines,
-not additional current observations or series.
-
-Collection preserves existing stored measurements with `on-existing: skip`, while
-its snapshot retains the freshly measured values from the selected execution.
-A separate store-based analysis of the same commit can therefore differ from the
-workflow report. Later writes to storage do not change the report's selected
-current measurements.
-
-### Ignore noisy benchmarks in analysis
-
-Add an optional `[ignore]` table with a `benchmarks` array to
-`.cargo/bench_history.toml`, or to the file selected by `config`. Each entry is a
-literal, case-sensitive prefix of a qualified benchmark ID, not a glob or regular
-expression.
-
-Matching benchmarks remain collected and available for raw inspection, but history
-and PR analysis exclude their metric series before detecting changes. Reports
-disclose the ignored series as outside scope. If all selected series are ignored,
-the analysis outcome is `nothing_in_scope`.
-
-This configuration needs no action input. Unlike the workflow's `exclude` input,
-which excludes packages from collection, it preserves the underlying measurements.
-
-### Accepted benchmark changes
-
-A blessing records acceptance of a benchmark change. History and PR analysis honor
-persisted blessings across their selected engine, target-triple and machine-key
-scope, including partitions without a measurement at the acceptance commit.
-Unrestricted scopes also cover future matching partitions. Existing partition-local
-blessings remain effective within their original restrictions.
-
-Manage acceptance through the
-[`bless`](https://folo-rs.github.io/folo/cargo-bench-history/commands/bless.html) and
-[`unbless`](https://folo-rs.github.io/folo/cargo-bench-history/commands/unbless.html)
-CLI commands. The action reads these records during analysis; it has no blessing
-mutation command or additional scope input.
-
-### Peak-memory analysis
-
-Available `alloc_tracker` peak outstanding-byte measurements participate in history
-and PR analysis by default, without an action input or analysis setting.
-
-Accumulating live memory between benchmark iterations makes peak comparisons
-unreliable: harness-selected batch sizes can change the peak and trigger false
-regression alerts. Producers can withhold unreliable peaks with
-`ThreadSpan::no_peak()` in `alloc_tracker` 0.7.12 or later. Hold the returned span
-across the measured iterations:
-
-```rust
-let _span = operation.measure_thread().no_peak().iterations(n);
-// Run the measured iterations before `_span` is dropped.
-```
-
-This suppresses the operation's peak measurement while preserving allocated bytes
-and allocation counts. Missing peaks remain absent rather than becoming zero.
-
-### Workflow configuration
-
-All reusable workflows require the Azure identifiers as strings. Backfill requires
-either `from` and `to` together, or `lookback` and `minimum-age` together with an
-optional `to` override. Inputs are:
-
-| Input | Default | Purpose |
+| Symptom | Where to look | Useful next step |
 | --- | --- | --- |
-| `platforms` | `ubuntu-latest,windows-latest` | CSV collection runner labels. |
-| `working-directory` | `.` | Project directory relative to the caller repository. |
-| `config` | `.cargo/bench_history.toml` under the invocation project | Committed configuration file, relative to that project directory. |
-| `exclude` | Empty | Packages excluded from collection; PR exclusions apply after dependency expansion. |
-| `bench` | Empty | CSV Cargo benchmark targets. |
-| `best-of` | `1` | Repetitions, retaining each metric's minimum. |
-| `all-features` | `true` | Enable all Cargo features. |
-| `no-default-features` | `false` | Disable default Cargo features. |
-| `features` | Empty | Additional CSV Cargo features. |
-| `rustflags` | Empty | Additional rustc arguments for measurements; uses Cargo `RUSTFLAGS` whitespace splitting, not shell parsing. |
-| `install-method` | `binstall` | `binstall`, `install` or `path` for every required tool. |
-| `source-path` | Empty | Folo source directory relative to the invocation checkout, required only for `path`. |
-| `publish` | `true` | History/PR only: enable all GitHub lifecycle/report writes. Analysis, artifacts and Actions result cards remain available when false. |
-| `since` | Main tool default | History-only look-back window. |
-| `from` | Empty | Backfill-only explicit range start; pair with `to`, without rolling inputs. |
-| `to` | Empty | Backfill-only explicit range end or rolling endpoint override. |
-| `lookback` | Empty | Backfill-only nonzero rolling duration; pair with `minimum-age`, without `from`. |
-| `minimum-age` | Empty | Backfill-only minimum age for an automatic endpoint; may be zero. |
-| `max-commits` | Empty (unlimited) | Backfill-only positive integer string limiting attempted commits per platform after skipping existing measurements. |
-| `ignore-errors` | `false` | Backfill only: continue past individual commit build or benchmark failures; infrastructure errors remain failures. |
+| No report or empty scope | Actions card, preparation logs, selected targets and ignore configuration | Distinguish no analysis from `nothing_in_scope`; confirm a supported engine emits measurements. |
+| Insufficient comparable baseline | Report coverage reasons and selected partitions | Collect distinct comparable history or resume bounded replay, then analyze again. |
+| Partial/missing platform | Card platform list and failed collection job | Repair that platform; a surviving report does not turn its failure green. |
+| Preparation, install, upload or publication failed | Failed stage logs and any retained local/report artifact | Fix the actual stage; source success is not proof that published binaries exist. Failure alerts are best-effort and may be unavailable before preparation or installation completes. |
+| Findings look stale | Frozen analyzed commit, run/attempt and newer runs | Use current evidence; an old issue does not establish current-head freshness. |
+| Issue remains open after all-clear | Issue's latest analysis and coverage | Treat open/closed as lifecycle state, not a regression verdict. |
+| Backfill queued, bounded or no work | Collection-only card, frozen range, stop reason and completion bundle | Wait for queued work, resume deferred commits, or adjust an ineligible range; then run analysis separately. |
+| Completion unavailable after interruption | Platform job and completion artifact | Treat counts as unknown, not zero; inspect storage/evidence before resuming. Hard cancellation may prevent finalization. |
 
-History and PR return `outcome`, `publication-state`, `notable`, `regressions`,
-`partial-platform-coverage`, `report-artifact-id` and `report-artifact-url` when
-analysis runs. They do not expose paths belonging to another job. `publication-state`
-is `findings`, `clean` or `inconclusive`; the underlying analysis outcome remains
-distinct. An empty selected benchmark scope is an explicit no-analysis path.
-The checked `publication-state` is not the status of a GitHub write.
+Use [Investigate and accept](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html)
+to inspect a finding and record an intentional change. Use
+[Operations](https://folo-rs.github.io/folo/cargo-bench-history/operations.html)
+for storage cost, bounded replay, retention and upgrades. These workflows do not
+provide automatic retention cleanup. Existing measurements are preserved; changing
+a protocol does not rewrite stored history or guarantee comparable baselines.
 
-For extra benchmark prerequisites, provide the fixed repository-local action
-`.github/actions/bench-history-setup/action.yml`. Collection calls it from the
-invocation checkout. There is no setup action path/ref override. Repositories
-needing a different job graph can use the root action below.
-
-`rustflags` applies only to collection and backfill, including the collection
-machine-key query, not tool installation or analysis. The companion appends its
-arguments to the effective ambient compiler flags, preferring
-`CARGO_ENCODED_RUSTFLAGS` when present over `RUSTFLAGS` and preserving existing
-encoded argument boundaries. The composed environment belongs only to child
-measurement processes; empty input leaves the environment unchanged.
-
-Source-mode Folo callers set `install-method: path` and `source-path: .`. Every tool
-comes from that invocation checkout, while PR measurements use a separate checkout
-of the frozen real head. The workflow and its internal actions stay on the same
-selected action revision through GitHub's `$/` self-repository references.
-
-### Backfill historical measurements
-
-Use the reusable backfill workflow for an explicit first-parent range or a rolling
-window. The caller supplies configuration; the workflow selects and freezes the
-range before starting its platform matrix. An explicit range caller is:
-
-```yaml
-name: Backfill benchmark history
-on:
-  workflow_dispatch:
-    inputs:
-      from:
-        description: Start of the backfill range
-        required: true
-        type: string
-      to:
-        description: End of the backfill range
-        required: true
-        type: string
-jobs:
-  backfill:
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v3
-    with:
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
-      from: ${{ inputs.from }}
-      to: ${{ inputs.to }}
-```
-
-A rolling caller needs no preparation job, date arithmetic or Git commands:
-
-```yaml
-name: Backfill recent benchmark history
-on:
-  schedule:
-    - cron: 0 2 * * *
-  workflow_dispatch:
-    inputs:
-      to:
-        description: Optional endpoint override
-        type: string
-jobs:
-  backfill:
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v3
-    with:
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
-      lookback: 14 days
-      minimum-age: 24 hours
-      to: ${{ inputs.to }}
-```
-
-Rolling durations use Jiff's friendly or ISO span magnitudes, such as `14 days`,
-`14 days ago` or `P14D`, not absolute dates. The companion uses one current-time
-snapshot and UTC calendar arithmetic. Automatic selection chooses the first
-eligible commit on the invocation head's first-parent history at least
-`minimum-age` old. `from` is the oldest reachable first-parent commit within the
-lookback window relative to that same current time, or `to` if none is in the
-window. An optional `to` bypasses automatic endpoint age selection; it does not
-move the lookback window's time origin. If no automatic endpoint qualifies,
-preparation succeeds with no work and runs no matrix.
-
-Backfill measures the workspace in each historical checkout, applying `exclude`
-without requiring a package list or benchmarks at the invocation head. Each
-platform checks out the frozen `to` commit with full history; configuration, the
-fixed setup hook and optional source-built tools still come from the invocation
-checkout. The main tool validates and traverses the first-parent range.
-
-Existing measurements are always skipped, making repeat invocations resumable.
-Optionally set `max-commits: '1'` in the caller's `with:` block to attempt at most
-one missing commit per platform. The input is a positive integer string; omission
-or an empty string leaves the range unlimited. Each platform has its own budget
-and attempts the newest missing commits first. Already-recorded commits in the
-current target/machine partition are skipped before counting and are not deferred.
-Every attempted replay counts, including attempts with no measurements,
-ignored failures and duplicates detected when writing. The current attempt finishes
-with normal storage and cleanup before a successful budget stop; no next attempt
-starts. The CLI summary reports stored, skipped, failed and deferred work and the
-stop reason.
-
-Invocations queue without cancelling or replacing earlier backfills; work also
-queues by canonical project and platform, including when configuration paths alias
-the same project. Each matrix job retains the hosted six-hour ceiling as an
-exceptional watchdog, and a failed platform does not cancel the other platforms.
-A commit limit is not a time limit: a single attempt can still exceed the watchdog.
-The workflow does not suppress job failures or hosted timeout cancellations.
-`ignore-errors` controls only the main tool's per-commit build/benchmark failure
-policy and defaults to false; a commit limit does not suppress failures.
-
-Backfill uploads completion evidence and writes a collection-only Actions card.
-It performs no analysis or publication and has no public outputs. Cards show the
-frozen range and each platform's stored, skipped-existing, empty, failed and
-deferred commit counts, plus its stop reason. A stopping benchmark failure can
-have final accounting while its job remains failed. Infrastructure failures or
-interruption may leave no final accounting; missing evidence means unknown, not
-zero. Reruns select the latest executed platform attempt, not an older success.
-
-Completion artifacts use
-`cbh-backfill-completion-<project>-<platform>-<attempt>`; the
-`cbh-backfill-result-<project>-<run-id>-<attempt>` bundle retains preparation,
-authenticated job selection and downloaded attempts for diagnostics. Fork-origin, `pull_request_target` and closed
-PR events start no collection, matching history's event selection.
-
-## Prerequisites
-
-- A Rust workspace with benchmarks supported by
-  [cargo-bench-history](https://folo-rs.github.io/folo/cargo-bench-history/), its chosen
-  Rust toolchain and any benchmark engine/system dependencies.
-- PowerShell 7.6 or later and Cargo. The release manifest lists supported runners.
-  `binstall` bootstraps the pinned official cargo-binstall action; `install` and
-  fallback compilation additionally require a working Rust build environment.
-- GitHub.com Actions runner 2.336.0 or later for reusable workflow self references.
-- Full Git history for analysis and backfill (`fetch-depth: 0`), and any required
-  base refs fetched by the caller.
-- A committed `.cargo/bench_history.toml` with a stable project identity, or an
-  explicit `config` path. Use `local-path` for a local store or configure Azure.
-
-For a local store, the configuration can be:
-
-```toml
-[project]
-id = "my-project"
-```
-
-For Azure storage, add the account and existing container:
-
-```toml
-[storage.azure]
-account = "myhistoryaccount"
-container = "bench-history"
-```
-
-Provision the account/container and a Microsoft Entra federated identity before the
-workflow runs. Configure storage data-plane access for that identity, set job
-environment variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`, and grant
-`id-token: write` for GitHub OIDC. The main tool handles Azure authentication;
-the action passes its environment through unchanged. Do not set `local-path` in
-that flow. Cloud analysis may use `cache` for its local read cache.
-
-## Advanced: root action reference
-
-The root composite exposes individual commands for custom workflows. Callers of
-this lower layer own checkout, prerequisites, dependencies, concurrency, collection
-evidence and artifact transport. Analysis never publishes, and the root action
-never uploads reports. A full commit reference can replace `@v3` when a consumer
-wants immutable version selection.
-
-This example keeps local measurement history in a caller-owned cache, collects on
-one platform, analyzes it and uploads the reports. Its first run may report no
-comparable history. Configure concurrency for the project's chosen history branch.
-
-```yaml
-name: Benchmark history
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-permissions:
-  contents: read
-concurrency:
-  group: benchmark-history-${{ github.ref }}
-  cancel-in-progress: false
-jobs:
-  history:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      # Prepare the workspace's Rust toolchain and benchmark engine prerequisites here.
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/measurement-history
-          key: measurements-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: measurements-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}-
-      - uses: folo-rs/cargo-bench-history-action@v3
-        id: collect
-        with:
-          command: collect
-          local-path: ${{ runner.temp }}/measurement-history
-          on-existing: skip
-          collection-snapshot: 'true'
-      - name: Select this collection for analysis
-        id: collection
-        shell: pwsh
-        env:
-          CBH_COLLECTION_FILE: ${{ steps.collect.outputs.collection-file }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace($env:CBH_COLLECTION_FILE)) { throw 'Collection emitted no snapshot.' }
-          $directory = Join-Path $env:RUNNER_TEMP "current-collections-$([guid]::NewGuid().ToString('N'))"
-          $platformDirectory = Join-Path $directory 'ubuntu-latest'
-          New-Item -ItemType Directory -Path $platformDirectory | Out-Null
-          Copy-Item -LiteralPath $env:CBH_COLLECTION_FILE -Destination (Join-Path $platformDirectory 'collection.json')
-          "directory=$directory" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
-      - uses: folo-rs/cargo-bench-history-action@v3
-        id: analyze
-        with:
-          command: analyze-history
-          local-path: ${{ runner.temp }}/measurement-history
-          context: ${{ github.sha }}
-          current-collections: ${{ steps.collection.outputs.directory }}
-          expected-platforms: ubuntu-latest
-          completed-platforms: ubuntu-latest
-      - uses: actions/upload-artifact@v4
-        id: reports
-        with:
-          name: benchmark-reports
-          path: |
-            ${{ steps.analyze.outputs.report-markdown }}
-            ${{ steps.analyze.outputs.report-json }}
-            ${{ steps.analyze.outputs.report-summary }}
-          if-no-files-found: error
-```
-
-Local storage is not shared between jobs unless the caller restores/downloads it.
-A platform matrix must aggregate successful collection evidence before a separate
-analysis job. Pass the intended platform names as `expected-platforms`, only
-confirmed successful platform names as `completed-platforms`, and the selected
-`<platform>/collection.json` snapshots as `current-collections`. The directory must
-contain only selected snapshot files, not downloaded receipts or unrelated files.
-Custom job graphs own retry selection and must not retain a prior successful
-snapshot for a platform whose latest executed job failed. The reusable workflows
-provide that reconciliation and artifact transport.
-
-For independent analysis of stored data, use `machine-keys` instead: a directory
-of selected `<platform>/machine-key.txt` files containing hardware fingerprints.
-This mode analyzes matching storage partitions and is not scoped to a collection
-execution. `machine-keys` and `current-collections` cannot be combined.
-
-Publication is a separate step after upload. For example, history findings can be
-published with the following step in a job granted `issues: write`:
-
-```yaml
-- uses: folo-rs/cargo-bench-history-action@v3
-  if: steps.analyze.outputs.publication-state == 'findings'
-  with:
-    command: publish-issue-findings
-    body-file: ${{ steps.analyze.outputs.report-summary }}
-    report-file: ${{ steps.analyze.outputs.report-json }}
-    analyzed-sha: ${{ github.sha }}
-    artifact-url: ${{ steps.reports.outputs.artifact-url }}
-    expected-platforms: ubuntu-latest
-    completed-platforms: ubuntu-latest
-```
-
-Publish only matching summary/JSON evidence from the same successful analysis.
-PR comment publication requires `pull-requests: write`, a `pr-number`, and the
-command's PR scope/head evidence. The companion uses the ambient short-lived
-`${{ github.token }}`; there is no token input. It explicitly skips fork-origin
-PR work before credentialed benchmark/publication operations. Do not run untrusted
-PR code in a privileged `pull_request_target` workflow.
-
-### Root commands and inputs
-
-| Command | Purpose |
-| --- | --- |
-| `collect` | Measure and store the selected benchmarks. |
-| `backfill` | Collect missing measurements across a historical range. |
-| `analyze-history` | Analyze history and write reports without publication. |
-| `analyze-pr` | Compare a PR against its base and write reports without publication. |
-| `publish-comment-findings`, `publish-comment-clean`, `publish-comment-preflight`, `publish-comment-inconclusive`, `publish-comment-failed` | Publish PR result or lifecycle evidence. |
-| `publish-issue-findings`, `publish-issue-clean`, `publish-issue-preflight`, `publish-issue-inconclusive`, `publish-issue-failed` | Maintain the project's rolling history issue. |
-| `alert` | Publish one workflow-failure alert, separate from the rolling issue. |
-
-`command` is required. `install-method` defaults to `binstall`. All other metadata
-defaults are empty: the Rust runtime applies per-command defaults and rejects
-inapplicable inputs. Inputs are strings, including `"true"`/`"false"` boolean inputs.
-The root metadata in [action.yml](action.yml) describes every input.
-
-For `command: backfill`, optional `max-commits` has the same attempted-commit
-semantics as the reusable backfill workflow. Leave it empty for unlimited work.
-Optional `completion-output` names a new JSON destination, absolute or relative
-to `working-directory`. Keep it outside the checkout. Retain the requested path
-before invoking the action and upload an existing file from an `always()` step,
-including after a stopping benchmark failure. There is no completion-path output
-on failure. The completion file describes collection accounting, not analysis.
-
-For `command: collect`, `collection-snapshot: 'true'` enables the `collection-file`
-output. It defaults to false in the runtime and is independent of `on-existing`.
-Use the snapshot for a subsequent collect-and-analyze report, including when
-existing stored history is preserved. Analysis selects these files with
-`current-collections`; an aggregate without any current benchmark subjects cannot
-produce a report.
-
-`working-directory` defaults to the caller's current directory. It selects the
-measured/configuration checkout, not the tool's source checkout. In source mode:
-
-```yaml
-- uses: folo-rs/cargo-bench-history-action@v3
-  with:
-    command: collect
-    install-method: path
-    source-path: ${{ github.workspace }}/folo-source
-    working-directory: ${{ github.workspace }}/measured-project
-    local-path: ${{ runner.temp }}/measurement-history
-```
-
-The caller must check out both directories. `source-path` is required only for
-`path`; it points to the Folo monorepo containing `packages/`. It does not override
-the release manifest for registry installations.
-
-### Root installation and outputs
-
-`binstall` installs exact manifest versions and permits source fallback.
-`install` uses exact-version `cargo install --locked`. `path` always builds and
-force-installs from the selected source checkout; it never restores the released
-tool cache. Its installed versions must match that checkout's Cargo metadata,
-not the registry versions in `release.json`. Every command installs the companion.
-Collection, backfill and analysis also install the main tool; consumers never
-install the faker. Package ownership queries are linked into the companion, not
-provided by a separately installed detector executable.
-
-Published installations cache Cargo receipts and verified executable files by OS,
-architecture and the exact required tool versions. Invalid or missing evidence
-causes reinstallation or an explicit error, not an assumed hit. Installation and
-runtime files live under a dedicated runner-temporary directory outside the
-caller checkout.
-
-The companion reports its executable version. The main tool does not implement
-`--version`: its identity evidence is the Cargo installation record and the
-available executable, with runtime command smoke checks. These checks are not an
-independent executable-reported version. If installation fails, the action fails;
-it cannot guarantee a GitHub alert when the companion itself is unavailable.
-
-Outputs are available only where meaningful for the selected command:
-`instance`, `skipped`, `machine-key`, `collection-file`, `outcome`, `notable`,
-`partial-platform-coverage`, `regressions`, `report-markdown`, `report-json`,
-`report-summary`, `publication-state` and `can-clear`. Report outputs are paths;
-callers upload those files. Findings are advisory; execution errors fail the step.
-
-## Local bootstrap checks
-
-With Pester and PSScriptAnalyzer already installed:
-
-```powershell
-Invoke-Pester -Path .\tests\Tools.Tests.ps1, .\tests\Run-Action.Tests.ps1
-Invoke-ScriptAnalyzer -Path .\scripts\Tools.psm1
-Invoke-ScriptAnalyzer -Path .\scripts\Run-Action.ps1
-```
-
-These checks mock installation and use filesystem fixtures. They do not prove
-published package or prebuilt-archive availability; that is the separate real
-installation gate.
+The v3 caller contract requires `actions: read` for **backfill as well as history
+and PR** so result cards can select executed-attempt evidence. This required
+permission is the reason for the action's 3.0.0 major boundary. When upgrading,
+add it to every caller and select the same action revision and measurement protocol
+across all flows. The examples describe the v3 contract, not publication status:
+check [available releases](https://github.com/folo-rs/cargo-bench-history-action/releases)
+before selecting a version. `@v3` follows compatible releases; a published full
+version tag or commit SHA fixes the action revision and its exact tool pins.
