@@ -7,6 +7,10 @@ Describe 'Workflow result adapters' {
     InModuleScope WorkflowResults {
         BeforeAll {
             function Invoke-ResultFixture {
+                if ($script:inputs.stage -ceq 'backfill') {
+                    $null = New-Item -ItemType Directory -Path $script:artifacts -Force
+                    $script:selection | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $script:artifacts 'jobs.json')
+                }
                 $script:inputs.needs = $script:needs | ConvertTo-Json -Depth 10
                 $script:inputs.steps = $script:steps | ConvertTo-Json -Depth 10
                 Invoke-WorkflowResult $script:inputs $script:runtime $TestDrive `
@@ -51,6 +55,7 @@ Describe 'Workflow result adapters' {
                 analyze = @{ outcome = 'success'; outputs = @{ 'report-json' = "a report; 'literal'.json" } }
                 reports = @{ outcome = 'success'; outputs = @{ 'artifact-url' = 'https://github.com/owner/project/actions/runs/42/artifacts/7' } }
                 publish = @{ outcome = 'skipped'; outputs = @{} }
+                selection = @{ outcome = 'success'; outputs = @{} }
             }
             $script:inputs = @{
                 stage = 'analysis'; publish = 'false'; companion = 'companion fixture'
@@ -186,6 +191,29 @@ Describe 'Workflow result adapters' {
             $script:request.result.platforms.Count | Should -Be 1
             $script:request.result.platforms[0].ContainsKey('completion_file') | Should -BeFalse
             ($script:request | ConvertTo-Json -Depth 10) | Should -Not -Match '"counts"|"total"'
+            Should -Invoke Invoke-WorkflowProcess -Exactly 1 -ParameterFilter { $Arguments[0] -ceq 'workflow-summary' }
+            Should -Invoke Invoke-WorkflowProcess -Exactly 0 -ParameterFilter { $Arguments -contains 'backfill-jobs' }
+        }
+
+        It 'retains authenticated job selection before upload without appending a card' {
+            $script:inputs.stage = 'backfill-selection'
+            $null = New-Item -ItemType Directory -Path $script:artifacts
+            Invoke-ResultFixture
+            Test-Path (Join-Path $script:artifacts 'jobs.json') | Should -BeTrue
+            Test-Path $script:summary | Should -BeFalse
+            Should -Invoke Invoke-WorkflowProcess -Exactly 1 -ParameterFilter {
+                ($Arguments -join '|') -ceq (@('--repository', 'owner/project', '--instance', 'project',
+                    'backfill-jobs', '--run-id', '42', '--expected-platforms', 'linux,windows',
+                    '--output-file', (Join-Path $script:artifacts 'jobs.json')) -join '|')
+            }
+        }
+
+        It 'never renders a leftover selection when the authenticated step failed' {
+            $script:inputs.stage = 'backfill'
+            $script:steps.selection.outcome = 'failure'
+            { Invoke-ResultFixture } | Should -Throw '*selection did not succeed*'
+            Should -Invoke Invoke-WorkflowProcess -Exactly 0
+            (Get-Content $script:summary -Raw) | Should -Match 'Execution:\*\* failure'
         }
 
         It 'rejects mismatched artifact <key> rather than selecting older or unrelated evidence' -ForEach @(

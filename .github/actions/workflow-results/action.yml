@@ -3,7 +3,7 @@ description: Bind execution evidence and append one offline result card without 
 
 inputs:
   stage:
-    description: analysis, terminal, backfill-evidence or backfill.
+    description: analysis, terminal, backfill-evidence, backfill-selection or backfill.
     required: true
   needs:
     description: Serialized job dependency context.
@@ -45,6 +45,6 @@ runs:
         CBH_JOB_STATUS: ${{ job.status }}
         CBH_EVENT_ACTION: ${{ github.event.action }}
         CBH_FORK: ${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository }}
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ inputs.stage == 'backfill-selection' && github.token || '' }}
       run: |
         & (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'Run-WorkflowResults.ps1')

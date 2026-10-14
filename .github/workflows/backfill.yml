@@ -248,6 +248,16 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
+      - name: Select the executed backfill attempts
+        id: selection
+        if: always() && needs.prepare.outputs.has-work == 'true' && steps.context.outcome == 'success'
+        uses: $/.github/actions/workflow-results
+        with:
+          stage: backfill-selection
+          needs: ${{ toJSON(needs) }}
+          steps: ${{ toJSON(steps) }}
+          companion: ${{ steps.context.outputs.companion }}
+          artifacts-directory: ${{ runner.temp }}/cbh-backfill-completions
       - name: Upload the diagnostic completion bundle
         id: bundle
         if: always() && needs.prepare.outputs.has-work == 'true'

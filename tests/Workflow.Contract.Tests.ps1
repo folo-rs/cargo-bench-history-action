@@ -555,7 +555,9 @@ Describe 'Actions result graph for <flow>' -ForEach @(
     It 'uses structural contexts and an installation-independent implementation path' {
         foreach ($job in $resultWorkflow.jobs.Values) {
             foreach ($step in $job.steps | Where-Object { $_['uses'] -ceq '$/.github/actions/workflow-results' }) {
-                $step.if | Should -BeExactly 'always()'
+                if ($step.with.stage -ceq 'backfill-selection') {
+                    $step.if | Should -BeExactly "always() && needs.prepare.outputs.has-work == 'true' && steps.context.outcome == 'success'"
+                } else { $step.if | Should -BeExactly 'always()' }
                 $step.with.needs | Should -BeExactly '${{ toJSON(needs) }}'
                 $step.with.steps | Should -BeExactly '${{ toJSON(steps) }}'
             }
@@ -601,6 +603,12 @@ Describe 'Actions result graph for <flow>' -ForEach @(
         $download.with['github-token'] | Should -BeExactly '${{ github.token }}'
         $download.with.ContainsKey('merge-multiple') | Should -BeFalse
         $download.with.pattern | Should -BeExactly 'cbh-backfill-completion-${{ needs.prepare.outputs.instance }}-*'
+        $resultSteps = $resultWorkflow.jobs.result.steps
+        $selection = @($resultSteps | Where-Object { $_['id'] -ceq 'selection' })[0]
+        $bundle = @($resultSteps | Where-Object { $_['id'] -ceq 'bundle' })[0]
+        [array]::IndexOf($resultSteps, $selection) | Should -BeLessThan ([array]::IndexOf($resultSteps, $bundle))
+        $resultsAction.runs.steps[0].env.GH_TOKEN |
+            Should -BeExactly '${{ inputs.stage == ''backfill-selection'' && github.token || '''' }}'
     }
 }
 

@@ -304,8 +304,12 @@ The authenticated Rust `backfill-jobs` projection selects executed attempts for
 PowerShell matches each selected identity to its exact downloaded envelope and
 passes the completion path unchanged to offline `workflow-summary`. Older
 completions cannot replace failed, cancelled or skipped retries. The aggregate
-artifact can retain superseded diagnostic files without selecting them as current
-evidence. Missing selected files remain unavailable.
+artifact includes the authenticated selection's job IDs, attempts and raw
+conclusions alongside the completion envelopes. It can retain superseded diagnostic
+files without selecting them as current evidence. Selection and upload precede
+the offline card step, which does not receive the GitHub CLI token. A failed
+selection cannot authorize rendering leftover evidence. Missing selected files
+remain unavailable.
 
 Only the final append point writes `GITHUB_STEP_SUMMARY`. Missing companion or
 renderer failure produces a minimal execution-only fallback with stage/log

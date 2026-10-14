@@ -331,8 +331,8 @@ zero. Reruns select the latest executed platform attempt, not an older success.
 
 Completion artifacts use
 `cbh-backfill-completion-<project>-<platform>-<attempt>`; the
-`cbh-backfill-result-<project>-<run-id>-<attempt>` bundle retains preparation and
-downloaded attempts for diagnostics. Fork-origin, `pull_request_target` and closed
+`cbh-backfill-result-<project>-<run-id>-<attempt>` bundle retains preparation,
+authenticated job selection and downloaded attempts for diagnostics. Fork-origin, `pull_request_target` and closed
 PR events start no collection, matching history's event selection.
 
 ## Prerequisites

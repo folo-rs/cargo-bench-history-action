@@ -155,7 +155,7 @@ function Invoke-WorkflowResult {
     $steps = $Inputs['steps'] | ConvertFrom-Json -AsHashtable
     $prepare = $needs['prepare']['outputs']
     $stage = $Inputs['stage']
-    if ($stage -cnotin @('analysis', 'terminal', 'backfill-evidence', 'backfill')) {
+    if ($stage -cnotin @('analysis', 'terminal', 'backfill-evidence', 'backfill-selection', 'backfill')) {
         throw "Unknown workflow result stage: $stage"
     }
     $root = Join-Path $TempDirectory "cbh-result-$([guid]::NewGuid().ToString('N'))"
@@ -163,6 +163,16 @@ function Invoke-WorkflowResult {
     if ($stage -ceq 'backfill-evidence') {
         Save-BackfillEvidence -Inputs $Inputs -Runtime $Runtime -Preparation $prepare -Directory $root
         "evidence-directory=$root" | Add-Content -LiteralPath $OutputPath -Encoding utf8
+        return
+    }
+    if ($stage -ceq 'backfill-selection') {
+        # Retain the authenticated selection in the uploaded diagnostic bundle.
+        # The later summary step is offline and cannot refresh or substitute it.
+        Invoke-WorkflowProcess -FilePath $Inputs['companion'] -Arguments @(
+            '--repository', $Runtime.repository, '--instance', $prepare['instance'],
+            'backfill-jobs', '--run-id', $Runtime.run_id,
+            '--expected-platforms', $prepare['expected-platforms'],
+            '--output-file', (Join-Path $Inputs['artifacts-directory'] 'jobs.json'))
         return
     }
     $execution = Get-ResultExecution -Needs $needs -Steps $steps -JobStatus $Runtime.job_status
@@ -190,11 +200,10 @@ function Invoke-WorkflowResult {
         }
         if ($Inputs['companion']) {
             if ($stage -ceq 'backfill' -and $prepare['has-work'] -ceq 'true') {
-                $selectionPath = Join-Path $root 'jobs.json'
-                Invoke-WorkflowProcess -FilePath $Inputs['companion'] -Arguments @(
-                    '--repository', $Runtime.repository, '--instance', $prepare['instance'],
-                    'backfill-jobs', '--run-id', $Runtime.run_id,
-                    '--expected-platforms', $prepare['expected-platforms'], '--output-file', $selectionPath)
+                if (-not $steps['selection'] -or $steps['selection']['outcome'] -cne 'success') {
+                    throw 'Backfill executed-attempt selection did not succeed.'
+                }
+                $selectionPath = Join-Path $Inputs['artifacts-directory'] 'jobs.json'
                 $selection = Get-Content -LiteralPath $selectionPath -Raw | ConvertFrom-Json -AsHashtable
                 $request.result = Get-BackfillResult -Selection $selection -Preparation $prepare `
                     -Runtime $Runtime -ArtifactsDirectory $Inputs['artifacts-directory']
