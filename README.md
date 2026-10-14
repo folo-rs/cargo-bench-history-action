@@ -62,9 +62,10 @@ account = "myhistoryaccount"
 container = "bench-history"
 ```
 
-Follow the canonical
+Install the [CLI](https://folo-rs.github.io/folo/cargo-bench-history/installation.html)
+on the machine used for provisioning, then follow the canonical
 [`setup-azure` guide](https://folo-rs.github.io/folo/cargo-bench-history/commands/setup-azure.html)
-to install the CLI prerequisites, provision or reuse storage and configure
+to prepare its prerequisites, provision or reuse storage and configure
 short-lived federated access for your repository and history branch. Reconcile the
 committed account/container with the command's printed configuration.
 The examples below use `main`; change their branch names together with the
