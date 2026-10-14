@@ -143,6 +143,12 @@ Describe 'Workflow result adapters' {
             $card | Should -Not -Match 'Rust result'
         }
 
+        It 'rejects an empty successful renderer response and still appends a visible fallback' {
+            Mock Invoke-WorkflowProcess { Set-Content -LiteralPath $Arguments[4] -Value ' ' }
+            { Invoke-ResultFixture } | Should -Throw '*empty card*'
+            (Get-Content $script:summary -Raw) | Should -Match 'no validated analysis'
+        }
+
         It 'retains completion bytes after a failed backfill without a success-shaped command output' {
             $script:inputs.stage = 'backfill-evidence'
             $script:inputs.platform = 'linux'
@@ -171,6 +177,7 @@ Describe 'Workflow result adapters' {
             $script:request.result.platforms[0].completion_file | Should -BeLike '*linux-1*'
             $script:request.result.platforms[1].ContainsKey('completion_file') | Should -BeFalse
             $script:request.result.platforms[1].execution | Should -BeExactly $execution
+            if ($execution -cne 'skipped') { $script:request.execution | Should -BeExactly $execution }
         }
 
         It 'never fabricates zero accounting for a missing platform or completion file' {
@@ -194,5 +201,64 @@ Describe 'Workflow result adapters' {
             { Invoke-ResultFixture } | Should -Throw "*mismatched $key*"
             (Get-Content $script:summary -Raw) | Should -Match 'no validated analysis'
         }
+    }
+}
+
+Describe 'Installation-independent result entry point' {
+    BeforeAll {
+        $script:entry = Join-Path $PSScriptRoot '..\scripts\Run-WorkflowResults.ps1'
+    }
+    BeforeEach {
+        $script:savedEnvironment = @{}
+        foreach ($name in @('CBH_RESULT_INPUTS', 'CBH_JOB_STATUS', 'CBH_EVENT_ACTION', 'CBH_FORK',
+                'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SERVER_URL',
+                'GITHUB_EVENT_NAME', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY', 'RUNNER_TEMP')) {
+            $script:savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+        $env:GITHUB_REPOSITORY = 'owner/project'
+        $env:GITHUB_RUN_ID = '42'
+        $env:GITHUB_RUN_ATTEMPT = '3'
+        $env:GITHUB_SERVER_URL = 'https://github.com'
+        $env:GITHUB_EVENT_NAME = 'pull_request'
+        $env:CBH_EVENT_ACTION = 'opened'
+        $env:CBH_FORK = 'false'
+        $env:CBH_JOB_STATUS = 'success'
+        $env:RUNNER_TEMP = $TestDrive
+        $env:GITHUB_OUTPUT = Join-Path $TestDrive "$([guid]::NewGuid()).outputs"
+        $env:GITHUB_STEP_SUMMARY = Join-Path $TestDrive "$([guid]::NewGuid()).summary"
+    }
+    AfterEach {
+        foreach ($name in $script:savedEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $script:savedEnvironment[$name])
+        }
+    }
+
+    It 'writes a preparation-failure card without a checkout, state file or executable' {
+        $env:CBH_RESULT_INPUTS = @{
+            stage = 'terminal'; publish = 'false'; companion = ''
+            needs = @{ prepare = @{ result = 'failure'; outputs = @{} } } | ConvertTo-Json -Depth 5
+            steps = '{}'
+        } | ConvertTo-Json
+        & $script:entry
+        $card = Get-Content $env:GITHUB_STEP_SUMMARY -Raw
+        $card | Should -Match 'Execution:\*\* failure'
+        $card | Should -Match 'job prepare'
+        $card | Should -Match 'GitHub publication:\*\* disabled'
+    }
+
+    It 'keeps a policy-skip explanation literal in the no-tool card' {
+        $env:CBH_FORK = 'true'
+        $env:CBH_EVENT_ACTION = '<unsafe>; $(throw)'
+        $env:CBH_RESULT_INPUTS = @{
+            stage = 'terminal'; publish = 'true'; companion = ''
+            needs = @{ prepare = @{ result = 'skipped'; outputs = @{} } } | ConvertTo-Json -Depth 5
+            steps = '{}'
+        } | ConvertTo-Json
+        & $script:entry
+        $card = Get-Content $env:GITHUB_STEP_SUMMARY -Raw
+        $card | Should -Match 'Execution:\*\* skipped'
+        $card | Should -Match 'fork_pull_request'
+        $card | Should -Match '&lt;unsafe&gt;'
+        $card | Should -Not -Match '<unsafe>'
     }
 }

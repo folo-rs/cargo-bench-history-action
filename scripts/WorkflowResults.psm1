@@ -8,8 +8,8 @@ Import-Module (Join-Path $PSScriptRoot 'Workflow.psm1')
 
 # Combine observed execution conclusions without interpreting analysis outcomes.
 function Get-ResultExecution {
-    param([hashtable] $Needs, [hashtable] $Steps, [string] $JobStatus)
-    $states = @($JobStatus) + @($Needs.Values | ForEach-Object { $_['result'] }) +
+    param([hashtable] $Needs, [hashtable] $Steps, [string] $JobStatus, [string[]] $Additional = @())
+    $states = @($JobStatus) + $Additional + @($Needs.Values | ForEach-Object { $_['result'] }) +
         @($Steps.Values | ForEach-Object { $_['outcome'] })
     if ($states -ccontains 'failure') { return 'failure' }
     if ($states -ccontains 'cancelled') { return 'cancelled' }
@@ -198,6 +198,11 @@ function Invoke-WorkflowResult {
                 $selection = Get-Content -LiteralPath $selectionPath -Raw | ConvertFrom-Json -AsHashtable
                 $request.result = Get-BackfillResult -Selection $selection -Preparation $prepare `
                     -Runtime $Runtime -ArtifactsDirectory $Inputs['artifacts-directory']
+                # Normalized executions can include an unretried failure from an
+                # earlier attempt that a current-attempt job aggregate omits.
+                $execution = Get-ResultExecution -Needs $needs -Steps $steps `
+                    -JobStatus $Runtime.job_status -Additional @($selection.platforms | ForEach-Object { $_.execution })
+                $request.execution = $execution
                 if ($steps['bundle'] -and $steps['bundle']['outcome'] -ceq 'success') {
                     $request.artifact_url = $steps['bundle']['outputs']['artifact-url']
                 }
@@ -216,6 +221,7 @@ function Invoke-WorkflowResult {
         # Never convert a renderer failure into a successful summary step. The
         # fallback preserves visibility, while the original diagnostic remains an error.
         $failure = $_
+        $card = $null
     }
     if ($null -eq $card) {
         $card = New-ExecutionFallback -Execution $execution -Publication $publication -RunUrl $runUrl `
