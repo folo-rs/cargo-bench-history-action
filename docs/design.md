@@ -27,10 +27,18 @@ Findings remain advisory; execution failures fail the step.
 Completed GitHub issue and PR reports use the core summary for their analysis
 heading and visible commit attribution, without repeating them in the surrounding
 message. Published reports link directly to the Insights guide for interpretation.
-Coverage details appear at the end of the full Markdown report and in the JSON
-report. When some in-scope metric series cannot be judged, the judged-series summary
-bullet includes "(see full report for details)" rather than emitting a coverage
-warning. Missing-platform and staleness warnings remain separate.
+Reports place findings and judged coverage together, including unjudged-reason
+counts and incomplete-coverage warnings. Complete coverage details remain at the
+end of the full Markdown report and in the JSON report. Missing-platform and
+comparison-base lag warnings remain separate.
+
+Condensed reports use a capped findings table with readable units and platform
+labels, expandable finding evidence and an expandable collection package inventory.
+Charts explain their orientation, scale, gaps and comparison context. Shell-labelled
+inspection commands preserve the report's query and measurement selectors while
+distinguishing stored data from exact current collection snapshots. Full Markdown
+retains every finding. Presentation does not change statistical decisions, analysis
+outcomes or the JSON report's metric identifiers, numeric units and precision.
 
 Inputs inapplicable to the selected command are errors. `working-directory` selects
 the measured/configuration checkout and defaults to the caller's working directory.

@@ -82,12 +82,20 @@ including when surviving platforms produce a useful qualified report.
 
 The report's **How to read this report** link opens the
 [Insights guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
-Coverage details are at the end of the full `report.md` and in `report.json`,
-not in the abbreviated `summary.md`. When some in-scope metric series cannot be
-judged, the judged-series summary bullet includes "(see full report for details)"
-rather than a warning. Missing-platform and staleness warnings remain separate.
+Findings and judged coverage appear together, including unjudged-reason counts
+and warnings when some in-scope series cannot be judged. Complete coverage details
+remain at the end of `report.md` and in `report.json`. Missing-platform and
+comparison-base lag warnings remain distinct.
 Completed GitHub issue and PR reports present the analysis heading and commit
 attribution in the summary without repeating them around it.
+
+The condensed summary uses a capped findings table with readable units and
+platform labels. Expandable evidence contains charts and shell-labelled inspection
+commands; the collection package inventory is also expandable. Chart legends explain
+the orientation, scale, gaps and comparison context. Inspection commands retain
+the report's query and measurement selectors but inspect stored data, not the exact
+current collection snapshots. Full Markdown retains every finding, and JSON retains
+the original metric identifiers, numeric units and precision.
 
 Reports use only the exact measurements collected by this workflow's selected jobs
 as current data. The latest executed job for each platform supersedes its earlier
