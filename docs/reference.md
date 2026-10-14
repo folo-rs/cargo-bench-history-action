@@ -138,13 +138,18 @@ public outputs. No workflow exposes paths belonging to another job.
 
 | Output | Value when available | Meaning |
 | --- | --- | --- |
-| `outcome` | Analysis outcome string | The core's analysis result, not execution status. |
+| `outcome` | `findings`, `clean`, `partial`, `insufficient_baseline` or `nothing_in_scope` | The core's analysis result, not execution status. |
 | `publication-state` | `findings`, `clean` or `inconclusive` | Checked disposition; not confirmation of a GitHub write. |
 | `notable` | `true` or `false` | Whether analysis reported notable changes. |
 | `regressions` | Nonnegative integer text | Regression count, not a boolean and not a coverage verdict. |
 | `partial-platform-coverage` | `true` or `false` | Whether an expected collection platform is missing. |
 | `report-artifact-id` | Artifact ID text | Identifier from the successful report upload. |
 | `report-artifact-url` | URL | Link to that uploaded report bundle. |
+
+Series coverage and platform completeness are separate. `partial` describes
+judged-series coverage; `partial-platform-coverage` describes missing collection
+platforms. Use the checked `publication-state`, not `outcome` alone, to select a
+publication command.
 
 An empty selected benchmark scope takes an explicit no-analysis path. Do not
 coerce absent outputs to a clean verdict. If custom automation reads the count,
