@@ -28,18 +28,21 @@ running job, so hard cancellation can prevent a card from being written.
 
 The report's **How to read this report** link opens the
 [Insights guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
-Findings and judged coverage appear together, including unjudged-reason counts
-and warnings when some in-scope series cannot be judged. Complete coverage details
-remain at the end of `report.md` and in `report.json`. Missing-platform and
-comparison-base lag warnings remain distinct.
-Completed GitHub issue and PR reports present the analysis heading and commit
-attribution in the summary without repeating them around it.
+Summaries keep judged coverage visible beside findings, with warnings when some
+in-scope series cannot be judged. Complete coverage counts and unjudged reasons
+remain at the end of `report.md` and in `report.json`. Missing-platform,
+comparison-base lag and stale-result warnings retain their distinct meanings.
+Completed GitHub issue and PR reports use the summary's verdict, heading and commit
+attribution without repeating them around it. Advisory wording follows the findings,
+and the collection package inventory remains expandable.
 
-The condensed summary uses a capped findings table with readable units and
-platform labels. Expandable evidence contains charts and shell-labelled inspection
-commands; the collection package inventory is also expandable. Chart legends explain
-the orientation, scale, gaps and comparison context. Inspection commands retain
-the report's query and measurement selectors but inspect stored data, not the exact
+The condensed summary arranges capped findings vertically, with wrapping benchmark
+names, readable units and platform labels. Branch findings show the current value
+and percentage excess beside a small sketch of the observed base range and current
+point. History findings show before/after representative levels and percentage change.
+Detailed comparisons, time-series plots, machine metadata and shell-labelled
+inspection commands belong in the full report. Inspection commands retain the
+report's query and measurement selectors but inspect stored data, not the exact
 current collection snapshots. Full Markdown retains every finding, and JSON retains
 the original metric identifiers, numeric units and precision.
 

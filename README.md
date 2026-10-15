@@ -138,6 +138,8 @@ available with `publish: false` or no findings issue. After successful analysis,
 the run's **Artifacts** section and card link to
 `bench-history-report-<project>-<run-id>-<attempt>` containing `summary.md`,
 `report.md` and `report.json`. PR reports use the `pr-bench-history-report-` prefix.
+Start with the vertical findings and compact range sketches in `summary.md`;
+open `report.md` for detailed plots, machine metadata and inspection commands.
 Preparation/installation failures instead get execution-only diagnostics; hard
 cancellation can prevent even finalization.
 
