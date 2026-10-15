@@ -26,15 +26,17 @@ scope. The tool's CLI owns mutation defaults, scope inspection and complete-scop
 deletion safeguards. PowerShell and the workflows neither interpret blessing
 records nor derive acceptance scope from the collection matrix or executing runner.
 
-The pinned Rust tools own report presentation: decision-first coverage, readable
-units and platform labels, the capped summary table, expandable evidence, chart
-legends and query-preserving inspection commands. The companion owns the expandable
-collection package inventory and uses the core summary's heading and visible commit
-attribution for completed GitHub issue and PR reports without adding duplicates.
-Coverage details, the Insights help link and incomplete-coverage, missing-platform
-and comparison-base lag warnings remain Rust-owned. PowerShell passes report paths
-unchanged and does not append or rewrite report content. Presentation preserves the
-statistical decisions and JSON report semantics.
+The pinned Rust tools own report presentation: vertical summary findings, readable
+units and platform labels, compact range sketches and visible judged coverage.
+Full reports retain detailed comparisons, time-series plots, machine metadata and
+query-preserving inspection commands. Time-series plot blocks contain only the
+visualization. The companion owns the expandable collection package inventory and
+uses the core summary's verdict, heading and visible commit attribution for completed
+GitHub issue and PR reports without adding duplicates. Its advisory wording follows
+the findings. Coverage details, the Insights help link and incomplete-coverage,
+missing-platform, comparison-base lag and stale-result warnings remain Rust-owned.
+PowerShell passes report paths unchanged and does not append or rewrite report
+content. Presentation preserves the statistical decisions and JSON report semantics.
 
 Peak outstanding-byte ingestion, default analysis and missing-peak handling belong
 to the pinned Rust tools. Producer-side `ThreadSpan::no_peak()` belongs to
