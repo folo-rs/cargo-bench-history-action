@@ -106,8 +106,10 @@ and the collection package inventory remains expandable.
 
 The condensed summary arranges capped findings vertically, with wrapping benchmark
 names, readable units and platform labels. Branch findings show the current value
-and percentage excess beside a small sketch of the observed base range and current
-point. History findings show before/after representative levels and percentage change.
+and percentage excess beside a full-line sketch of the observed base range and
+current point. Both share an increasing linear scale that includes real zero.
+The strip uses the desktop report line; narrow views scroll within its code block.
+History findings show before/after representative levels and percentage change.
 Detailed comparisons, time-series plots, machine metadata and shell-labelled
 inspection commands belong in the full report. Inspection commands retain the
 report's query and measurement selectors but inspect stored data, not the exact

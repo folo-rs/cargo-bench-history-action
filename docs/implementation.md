@@ -27,7 +27,9 @@ deletion safeguards. PowerShell and the workflows neither interpret blessing
 records nor derive acceptance scope from the collection matrix or executing runner.
 
 The pinned Rust tools own report presentation: vertical summary findings, readable
-units and platform labels, compact range sketches and visible judged coverage.
+units and platform labels, full-line zero-anchored range sketches and visible judged
+coverage. The shared renderer owns the increasing linear scale and desktop line
+width; narrow views scroll inside the code block rather than shortening the strip.
 Full reports retain detailed comparisons, time-series plots, machine metadata and
 query-preserving inspection commands. Time-series plot blocks contain only the
 visualization. The companion owns the expandable collection package inventory and
