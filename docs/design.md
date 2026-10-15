@@ -24,21 +24,26 @@ Analysis writes reports but never posts them. Publication consumes the summary a
 JSON from the same successful analysis and validates the expected/completed platforms.
 Findings remain advisory; execution failures fail the step.
 
-Completed GitHub issue and PR reports use the core summary for their analysis
-heading and visible commit attribution, without repeating them in the surrounding
-message. Published reports link directly to the Insights guide for interpretation.
-Reports place findings and judged coverage together, including unjudged-reason
-counts and incomplete-coverage warnings. Complete coverage details remain at the
-end of the full Markdown report and in the JSON report. Missing-platform and
-comparison-base lag warnings remain separate.
+Completed GitHub issue and PR reports use the core summary's verdict, analysis
+heading and visible commit attribution without repeating them in the surrounding
+message. Advisory wording follows the findings; collection package scope remains
+expandable. Published reports link directly to the Insights guide for interpretation.
+Summaries keep judged coverage and incomplete-coverage warnings beside findings.
+Complete coverage counts and unjudged reasons remain at the end of the full Markdown
+report and in the JSON report. Missing-platform, comparison-base lag and stale-result
+warnings retain their distinct meanings.
 
-Condensed reports use a capped findings table with readable units and platform
-labels, expandable finding evidence and an expandable collection package inventory.
-Charts explain their orientation, scale, gaps and comparison context. Shell-labelled
-inspection commands preserve the report's query and measurement selectors while
-distinguishing stored data from exact current collection snapshots. Full Markdown
-retains every finding. Presentation does not change statistical decisions, analysis
-outcomes or the JSON report's metric identifiers, numeric units and precision.
+Condensed reports arrange capped findings vertically with wrapping benchmark names,
+readable units and platform labels. Branch findings show the current value and
+percentage excess beside a small sketch of the observed base range and current
+point; history findings show before/after representative levels and percentage
+change. Detailed comparisons, time-series plots, raw machine metadata and
+shell-labelled inspection commands belong in the full report rather than repeating
+inside each summary finding. The commands preserve query and measurement selectors
+while distinguishing stored data from exact current collection snapshots.
+Full Markdown retains every finding. Presentation does not change statistical
+decisions, analysis outcomes or the JSON report's metric identifiers, numeric units
+and precision.
 
 Inputs inapplicable to the selected command are errors. `working-directory` selects
 the measured/configuration checkout and defaults to the caller's working directory.
