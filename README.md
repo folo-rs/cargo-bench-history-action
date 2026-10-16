@@ -82,12 +82,25 @@ including when surviving platforms produce a useful qualified report.
 
 The report's **How to read this report** link opens the
 [Insights guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
-Coverage details are at the end of the full `report.md` and in `report.json`,
-not in the abbreviated `summary.md`. When some in-scope metric series cannot be
-judged, the judged-series summary bullet includes "(see full report for details)"
-rather than a warning. Missing-platform and staleness warnings remain separate.
-Completed GitHub issue and PR reports present the analysis heading and commit
-attribution in the summary without repeating them around it.
+Summaries keep judged coverage visible beside findings, with warnings when some
+in-scope series cannot be judged. Complete coverage counts and unjudged reasons
+remain at the end of `report.md` and in `report.json`. Missing-platform,
+comparison-base lag and stale-result warnings retain their distinct meanings.
+Completed GitHub issue and PR reports use the summary's verdict, heading and commit
+attribution without repeating them around it. Advisory wording follows the findings,
+and the collection package inventory remains expandable.
+
+The condensed summary arranges capped findings vertically, with wrapping benchmark
+names, readable units and platform labels. Branch findings show the current value
+and percentage excess beside a full-line sketch of the observed base range and
+current point. Both share an increasing linear scale that includes real zero.
+The strip uses the desktop report line; narrow views scroll within its code block.
+History findings show before/after representative levels and percentage change.
+Detailed comparisons, time-series plots, machine metadata and shell-labelled
+inspection commands belong in the full report. Inspection commands retain the
+report's query and measurement selectors but inspect stored data, not the exact
+current collection snapshots. Full Markdown retains every finding, and JSON retains
+the original metric identifiers, numeric units and precision.
 
 Reports use only the exact measurements collected by this workflow's selected jobs
 as current data. The latest executed job for each platform supersedes its earlier

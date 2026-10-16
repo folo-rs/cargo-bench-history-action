@@ -26,13 +26,19 @@ scope. The tool's CLI owns mutation defaults, scope inspection and complete-scop
 deletion safeguards. PowerShell and the workflows neither interpret blessing
 records nor derive acceptance scope from the collection matrix or executing runner.
 
-The pinned Rust tools own the full Markdown report's Coverage listing, the Insights
-help link and the conditional full-report pointer in the judged-series summary
-bullet. The companion uses the core summary's heading and visible commit
-attribution for completed GitHub issue and PR reports without adding duplicates.
-Incomplete in-scope series do not produce a coverage warning; missing-platform and
-staleness warnings remain Rust-owned. PowerShell passes report paths unchanged and
-does not append or rewrite report content.
+The pinned Rust tools own report presentation: vertical summary findings, readable
+units and platform labels, full-line zero-anchored range sketches and visible judged
+coverage. The shared renderer owns the increasing linear scale and desktop line
+width; narrow views scroll inside the code block rather than shortening the strip.
+Full reports retain detailed comparisons, time-series plots, machine metadata and
+query-preserving inspection commands. Time-series plot blocks contain only the
+visualization. The companion owns the expandable collection package inventory and
+uses the core summary's verdict, heading and visible commit attribution for completed
+GitHub issue and PR reports without adding duplicates. Its advisory wording follows
+the findings. Coverage details, the Insights help link and incomplete-coverage,
+missing-platform, comparison-base lag and stale-result warnings remain Rust-owned.
+PowerShell passes report paths unchanged and does not append or rewrite report
+content. Presentation preserves the statistical decisions and JSON report semantics.
 
 Peak outstanding-byte ingestion, default analysis and missing-peak handling belong
 to the pinned Rust tools. Producer-side `ThreadSpan::no_peak()` belongs to
