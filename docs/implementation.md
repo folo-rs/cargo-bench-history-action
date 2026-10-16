@@ -323,6 +323,21 @@ stop the runner before an `always()` finalizer executes.
 
 ## Validation and release boundaries
 
+`tests/Onboarding.Tests.ps1` parses executable README/reference examples and checks
+their supplied inputs and permissions against the actual reusable workflows and
+root metadata. It executes the setup recipe's PowerShell with controlled command
+substitutes, verifying compiler selection across supported runner families,
+optional Linux engine setup, exact argument vectors and failure propagation.
+These checks do not install tools or prove published binary availability.
+
+The caller-owned setup recipe lives at the same fixed path consumers copy. It
+exports `RUSTUP_TOOLCHAIN` for current collection, rather than using an
+invocation-directory override or generating files in that checkout. Core backfill
+removes launcher `RUSTUP_TOOLCHAIN` and `CARGO` overrides from historical benchmark
+and probe commands so each checkout resolves its own toolchain.
+Repository variables select the caller's compiler and optional Gungraun runner;
+neither variable overrides the action manifest's tool pins.
+
 Pester covers installer argument construction, exact manifest selection, cache
 validation and release reconciliation using mocked process results. Real canaries
 exercise the same installer and root action with isolated roots.

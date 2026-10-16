@@ -13,6 +13,29 @@ The root composite action exposes the same stages for custom job graphs. Those
 advanced callers own checkout, benchmark prerequisites, dependencies, concurrency
 and artifact upload/download.
 
+## Onboarding and operating guidance
+
+The README presents one ordered reusable-workflow journey: existing benchmarks and
+supported runners, committed project/storage configuration, Azure federation,
+nonsecret variables, optional runner prerequisites, history collection, result
+evidence, bounded baseline replay and PR comparison. The detailed input/output
+reference and custom root-action graph remain separate from this starter.
+
+The setup recipe selects a caller-pinned compiler for current collection through
+runner-wide environment state. Historical backfill clears launcher toolchain
+overrides and resolves the historical checkout's toolchain. The optional Gungraun
+setup requires Linux and a runner version matching the
+benchmark dependency. It does not assume nightly or system-engine dependencies for
+every Rust project. The fixed hook belongs to the invocation checkout and exposes
+no measured-checkout input or per-historical-commit preparation hook.
+
+First-success guidance separates successful execution, analysis outcome, evidence
+coverage and publication. Missing reports/counts remain unknown. Bounded backfill
+creates history without analysis or publication; repeated measurements of one
+commit do not establish distinct historical observations. The owning tool's book
+defines report interpretation, accepted changes, baseline readiness and retention;
+the action documentation links that policy instead of maintaining a second copy.
+
 ## Commands and evidence
 
 `command` selects collection, backfill, history or PR analysis, a

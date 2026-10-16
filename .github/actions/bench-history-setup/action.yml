@@ -1,0 +1,57 @@
+# Copy this caller-owned recipe into the repository being measured.
+# Runner-wide preparation reaches isolated measurement checkouts; generated files
+# in this invocation checkout do not. See README.md, "Prepare benchmark prerequisites".
+name: Prepare benchmark prerequisites
+description: Select a pinned project compiler and optionally prepare Linux Gungraun benchmarks.
+runs:
+  using: composite
+  steps:
+    - name: Install project measurement prerequisites
+      shell: pwsh
+      env:
+        BENCHMARK_RUST_TOOLCHAIN: ${{ vars.BENCHMARK_RUST_TOOLCHAIN }}
+        BENCHMARK_GUNGRAUN_VERSION: ${{ vars.BENCHMARK_GUNGRAUN_VERSION }}
+      run: |
+        #Requires -Version 7.6
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+
+        if ($env:RUNNER_OS -notin @('Linux', 'Windows', 'macOS')) {
+          throw "Unsupported benchmark runner: $env:RUNNER_OS"
+        }
+        $toolchain = $env:BENCHMARK_RUST_TOOLCHAIN
+        if ($toolchain -cnotmatch '^(\d+\.\d+\.\d+|nightly-\d{4}-\d{2}-\d{2})$') {
+          throw 'Set BENCHMARK_RUST_TOOLCHAIN to an exact Rust version or dated nightly.'
+        }
+        $engineVersion = $env:BENCHMARK_GUNGRAUN_VERSION
+        if (-not [string]::IsNullOrEmpty($engineVersion)) {
+          if ($engineVersion -cnotmatch '^\d+\.\d+\.\d+$') {
+            throw 'Set BENCHMARK_GUNGRAUN_VERSION to the exact gungraun dependency version.'
+          }
+          # This recipe uses the Ubuntu package manager; do not silently omit an engine.
+          if ($env:RUNNER_OS -ne 'Linux') {
+            throw 'This Gungraun recipe requires platforms: ubuntu-latest in every caller.'
+          }
+        }
+
+        $arguments = @('toolchain', 'install', $toolchain, '--profile', 'minimal', '--no-self-update')
+        & rustup @arguments
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot install the benchmark Rust toolchain.' }
+        # Select current collection across its isolated checkout. Backfill clears this
+        # launcher override and resolves each historical checkout's own toolchain.
+        $env:RUSTUP_TOOLCHAIN = $toolchain
+        "RUSTUP_TOOLCHAIN=$toolchain" | Add-Content -LiteralPath $env:GITHUB_ENV
+
+        if (-not [string]::IsNullOrEmpty($engineVersion)) {
+          $arguments = @('apt-get', 'update')
+          & sudo @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot update the Valgrind package index.' }
+          $arguments = @('apt-get', 'install', '--yes', 'valgrind')
+          & sudo @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot install Valgrind.' }
+          # The runner binary must match the benchmark crate, including historical replays.
+          $arguments = @('install', 'gungraun-runner', '--version', "=$engineVersion", '--locked')
+          & cargo @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot install the matching Gungraun runner.' }
+        }
