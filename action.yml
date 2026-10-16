@@ -149,7 +149,7 @@ runs:
         key: ${{ steps.prepare.outputs.cache-key }}
     - name: Bootstrap cargo-binstall
       if: inputs.install-method == 'binstall' || inputs.install-method == ''
-      uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
+      uses: cargo-bins/cargo-binstall@3be4ad2b146f3302f92e5956c54fedbb6ae8cccc # v1.25.3
       with:
         version: 1.23.0
     - name: Install and verify benchmark-history tools
