@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "2.4.5",
+  "version": "2.4.6",
   "tools": [
     {
       "name": "cargo-bench-history",
@@ -17,7 +17,7 @@
     {
       "name": "cargo-bench-history-faker",
       "binary": "cargo-bench-history-faker",
-      "version": "0.2.12",
+      "version": "0.2.13",
       "role": "fixture"
     }
   ],
