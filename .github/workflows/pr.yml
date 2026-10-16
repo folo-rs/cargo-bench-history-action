@@ -88,8 +88,8 @@ on:
 
 permissions: {}
 
-# A closed event still enters this group to cancel superseded work, but runs no
-# jobs. Ref: ../../docs/implementation.md#reusable-workflow-orchestration.
+# A closed event cancels superseded work without starting collection.
+# Ref: ../../docs/implementation.md#reusable-workflow-orchestration.
 concurrency:
   group: cbh-pr-${{ github.repository }}-${{ inputs.working-directory }}-${{ inputs.config }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -150,6 +150,7 @@ jobs:
       queue: max
     outputs:
       owner-attempt: ${{ steps.owner.outputs.attempt }}
+      publication-result: ${{ steps.publish.outcome }}
     steps:
       - id: context
         uses: $/.github/actions/workflow-tools
@@ -160,6 +161,7 @@ jobs:
           working-directory: ${{ inputs.working-directory }}
           config: ${{ inputs.config }}
       - name: Record pending benchmark work
+        id: publish
         uses: $/
         with:
           command: publish-comment-preflight
@@ -334,6 +336,7 @@ jobs:
             ${{ steps.analyze.outputs.report-json }}
             ${{ steps.analyze.outputs.report-summary }}
       - name: Publish the checked report disposition
+        id: publish
         if: inputs.publish
         uses: $/
         with:
@@ -353,6 +356,18 @@ jobs:
           run-id: ${{ github.run_id }}
           run-attempt: ${{ github.run_attempt }}
 
+      # Retain the original successful report even if upload or publication fails.
+      # Ref: ../../docs/implementation.md#workflow-result-cards.
+      - name: Write the Actions result card
+        if: always()
+        uses: $/.github/actions/workflow-results
+        with:
+          stage: analysis
+          needs: ${{ toJSON(needs) }}
+          steps: ${{ toJSON(steps) }}
+          publish: ${{ inputs.publish }}
+          companion: ${{ steps.context.outputs.companion }}
+
   empty-scope:
     needs: prepare
     if: inputs.publish && needs.prepare.outputs.skipped != 'true' && needs.prepare.outputs.skip-all == 'true'
@@ -364,6 +379,8 @@ jobs:
       group: cbh-comment-${{ github.repository }}-${{ needs.prepare.outputs.instance }}-${{ github.event.pull_request.number }}
       cancel-in-progress: false
       queue: max
+    outputs:
+      publication-result: ${{ steps.publish.outcome }}
     steps:
       - id: context
         uses: $/.github/actions/workflow-tools
@@ -374,6 +391,7 @@ jobs:
           working-directory: ${{ inputs.working-directory }}
           config: ${{ inputs.config }}
       - name: Explain an explicitly empty benchmark scope
+        id: publish
         uses: $/
         with:
           command: publish-comment-inconclusive
@@ -403,6 +421,8 @@ jobs:
       group: cbh-comment-${{ github.repository }}-${{ needs.prepare.outputs.instance }}-${{ github.event.pull_request.number }}
       cancel-in-progress: false
       queue: max
+    outputs:
+      publication-result: ${{ steps.publish.outcome }}
     steps:
       - id: context
         uses: $/.github/actions/workflow-tools
@@ -413,6 +433,7 @@ jobs:
           working-directory: ${{ inputs.working-directory }}
           config: ${{ inputs.config }}
       - name: Retire only this run's unfinished publication
+        id: publish
         uses: $/
         with:
           command: publish-comment-failed
@@ -425,3 +446,29 @@ jobs:
           run-id: ${{ github.run_id }}
           run-attempt: ${{ needs.preflight.outputs.owner-attempt || github.run_attempt }}
           conclusion: ${{ contains(needs.*.result, 'failure') && 'failure' || 'cancelled' }}
+
+  result:
+    needs: [prepare, preflight, collect, analyze, empty-scope, failed]
+    if: always() && needs.analyze.result == 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - id: context
+        if: needs.prepare.result == 'success' && needs.prepare.outputs.skipped != 'true'
+        uses: $/.github/actions/workflow-tools
+        with:
+          head: ${{ needs.prepare.outputs.head }}
+          install-method: ${{ inputs.install-method }}
+          source-path: ${{ inputs.source-path }}
+          working-directory: ${{ inputs.working-directory }}
+          config: ${{ inputs.config }}
+      - name: Write the no-analysis Actions result card
+        if: always()
+        uses: $/.github/actions/workflow-results
+        with:
+          stage: terminal
+          needs: ${{ toJSON(needs) }}
+          steps: ${{ toJSON(steps) }}
+          publish: ${{ inputs.publish }}
+          companion: ${{ steps.context.outputs.companion }}
