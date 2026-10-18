@@ -4,6 +4,10 @@ Reusable workflows collect or backfill benchmark history and report changes with
 each repository to maintain the collection matrix, receipt handoff and publication
 job graph. The root composite action remains available for custom job graphs.
 
+Reusable workflow callers require `actions: read`, including backfill, to select
+evidence from the correct executed attempts. This read permission is independent
+of issue/comment publication and is required with `publish: false`.
+
 ## Start with the reusable workflows
 
 Commit your benchmark-history configuration and provision its Azure store and
@@ -28,7 +32,7 @@ jobs:
       actions: read
       id-token: write
       issues: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v2
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v3
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -49,7 +53,7 @@ jobs:
       actions: read
       id-token: write
       pull-requests: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@v2
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@v3
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -79,6 +83,16 @@ Reports are uploaded as `bench-history-report-<project>-<run-id>-<attempt>` or
 issue need exist until findings appear. Clean updates leave an existing issue open;
 inconclusive evidence cannot clear findings. Execution failures remain failures,
 including when surviving platforms produce a useful qualified report.
+
+The Actions run summary shows a result card even when `publish: false` or no
+issue/comment is created. It separates execution status, the analysis result,
+judged and platform coverage, and publication status, with artifact/run links and
+a next action. A successful publication request may leave posts unchanged under
+the lifecycle rules. An absent report is not a clean result.
+
+Preparation and installation failures receive an execution-only card with a
+stage/log link; they do not supply a benchmark verdict. Finalization needs a
+running job, so hard cancellation can prevent a card from being written.
 
 The report's **How to read this report** link opens the
 [Insights guide](https://folo-rs.github.io/folo/cargo-bench-history/appendix/insights.html).
@@ -169,7 +183,7 @@ optional `to` override. Inputs are:
 | `rustflags` | Empty | Additional rustc arguments for measurements; uses Cargo `RUSTFLAGS` whitespace splitting, not shell parsing. |
 | `install-method` | `binstall` | `binstall`, `install` or `path` for every required tool. |
 | `source-path` | Empty | Folo source directory relative to the invocation checkout, required only for `path`. |
-| `publish` | `true` | History/PR only: enable all GitHub lifecycle/report writes. Analysis and artifacts remain available when false. |
+| `publish` | `true` | History/PR only: enable all GitHub lifecycle/report writes. Analysis, artifacts and Actions result cards remain available when false. |
 | `since` | Main tool default | History-only look-back window. |
 | `from` | Empty | Backfill-only explicit range start; pair with `to`, without rolling inputs. |
 | `to` | Empty | Backfill-only explicit range end or rolling endpoint override. |
@@ -183,6 +197,7 @@ History and PR return `outcome`, `publication-state`, `notable`, `regressions`,
 analysis runs. They do not expose paths belonging to another job. `publication-state`
 is `findings`, `clean` or `inconclusive`; the underlying analysis outcome remains
 distinct. An empty selected benchmark scope is an explicit no-analysis path.
+The checked `publication-state` is not the status of a GitHub write.
 
 For extra benchmark prerequisites, provide the fixed repository-local action
 `.github/actions/bench-history-setup/action.yml`. Collection calls it from the
@@ -224,8 +239,9 @@ jobs:
   backfill:
     permissions:
       contents: read
+      actions: read
       id-token: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v2
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v3
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -249,8 +265,9 @@ jobs:
   backfill:
     permissions:
       contents: read
+      actions: read
       id-token: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v2
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v3
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -296,9 +313,19 @@ The workflow does not suppress job failures or hosted timeout cancellations.
 `ignore-errors` controls only the main tool's per-commit build/benchmark failure
 policy and defaults to false; a commit limit does not suppress failures.
 
-Backfill performs no analysis or publication, uploads no receipts or reports, and
-has no public outputs. Fork-origin, `pull_request_target` and closed PR events start
-no work, matching history's event selection.
+Backfill uploads completion evidence and writes a collection-only Actions card.
+It performs no analysis or publication and has no public outputs. Cards show the
+frozen range and each platform's stored, skipped-existing, empty, failed and
+deferred commit counts, plus its stop reason. A stopping benchmark failure can
+have final accounting while its job remains failed. Infrastructure failures or
+interruption may leave no final accounting; missing evidence means unknown, not
+zero. Reruns select the latest executed platform attempt, not an older success.
+
+Completion artifacts use
+`cbh-backfill-completion-<project>-<platform>-<attempt>`; the
+`cbh-backfill-result-<project>-<run-id>-<attempt>` bundle retains preparation,
+authenticated job selection and downloaded attempts for diagnostics. Fork-origin, `pull_request_target` and closed
+PR events start no collection, matching history's event selection.
 
 ## Prerequisites
 
@@ -341,7 +368,7 @@ that flow. Cloud analysis may use `cache` for its local read cache.
 The root composite exposes individual commands for custom workflows. Callers of
 this lower layer own checkout, prerequisites, dependencies, concurrency, collection
 evidence and artifact transport. Analysis never publishes, and the root action
-never uploads reports. A full commit reference can replace `@v2` when a consumer
+never uploads reports. A full commit reference can replace `@v3` when a consumer
 wants immutable version selection.
 
 This example keeps local measurement history in a caller-owned cache, collects on
@@ -372,7 +399,7 @@ jobs:
           path: ${{ runner.temp }}/measurement-history
           key: measurements-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: measurements-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}-
-      - uses: folo-rs/cargo-bench-history-action@v2
+      - uses: folo-rs/cargo-bench-history-action@v3
         id: collect
         with:
           command: collect
@@ -392,7 +419,7 @@ jobs:
           New-Item -ItemType Directory -Path $platformDirectory | Out-Null
           Copy-Item -LiteralPath $env:CBH_COLLECTION_FILE -Destination (Join-Path $platformDirectory 'collection.json')
           "directory=$directory" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
-      - uses: folo-rs/cargo-bench-history-action@v2
+      - uses: folo-rs/cargo-bench-history-action@v3
         id: analyze
         with:
           command: analyze-history
@@ -431,7 +458,7 @@ Publication is a separate step after upload. For example, history findings can b
 published with the following step in a job granted `issues: write`:
 
 ```yaml
-- uses: folo-rs/cargo-bench-history-action@v2
+- uses: folo-rs/cargo-bench-history-action@v3
   if: steps.analyze.outputs.publication-state == 'findings'
   with:
     command: publish-issue-findings
@@ -469,6 +496,11 @@ The root metadata in [action.yml](action.yml) describes every input.
 
 For `command: backfill`, optional `max-commits` has the same attempted-commit
 semantics as the reusable backfill workflow. Leave it empty for unlimited work.
+Optional `completion-output` names a new JSON destination, absolute or relative
+to `working-directory`. Keep it outside the checkout. Retain the requested path
+before invoking the action and upload an existing file from an `always()` step,
+including after a stopping benchmark failure. There is no completion-path output
+on failure. The completion file describes collection accounting, not analysis.
 
 For `command: collect`, `collection-snapshot: 'true'` enables the `collection-file`
 output. It defaults to false in the runtime and is independent of `on-existing`.
@@ -481,7 +513,7 @@ produce a report.
 measured/configuration checkout, not the tool's source checkout. In source mode:
 
 ```yaml
-- uses: folo-rs/cargo-bench-history-action@v2
+- uses: folo-rs/cargo-bench-history-action@v3
   with:
     command: collect
     install-method: path

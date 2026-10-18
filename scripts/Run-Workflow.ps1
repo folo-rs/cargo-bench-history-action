@@ -26,7 +26,7 @@ if ($Stage -eq 'layout') {
         -Config $inputs['config'] -SourcePath $inputs['source-path'] -Base $inputs['base'] -Instance $inputs['instance']
     $context | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $context['state-path'] -Encoding utf8
     foreach ($key in @('state-path', 'scripts-path', 'checkout-path', 'working-directory', 'config',
-            'source-path', 'receipt-file', 'receipts-directory', 'cache-directory')) {
+            'source-path', 'receipt-file', 'completion-file', 'receipts-directory', 'cache-directory')) {
         Add-WorkflowOutput $key $context[$key]
     }
     return

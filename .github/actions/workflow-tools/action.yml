@@ -46,6 +46,9 @@ outputs:
   receipt-file:
     value: ${{ steps.layout.outputs.receipt-file }}
     description: Successful collection receipt and embedded snapshot destination.
+  completion-file:
+    value: ${{ steps.layout.outputs.completion-file }}
+    description: New absolute backfill completion destination outside the measured checkout.
   receipts-directory:
     value: ${{ steps.layout.outputs.receipts-directory }}
     description: Artifact download destination.

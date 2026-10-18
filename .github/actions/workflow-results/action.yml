@@ -1,0 +1,50 @@
+name: Internal workflow results
+description: Bind execution evidence and append one offline result card without publishing.
+
+inputs:
+  stage:
+    description: analysis, terminal, backfill-evidence, backfill-selection or backfill.
+    required: true
+  needs:
+    description: Serialized job dependency context.
+    required: true
+  steps:
+    description: Serialized preceding step context.
+    required: true
+  publish:
+    description: Whether this flow requests GitHub publication.
+    default: 'false'
+  companion:
+    description: Already verified companion executable, if installation succeeded.
+    default: ''
+  platform:
+    description: Backfill evidence platform.
+    default: ''
+  completion-file:
+    description: Known backfill completion path, independent of command success.
+    default: ''
+  artifacts-directory:
+    description: Downloaded immutable completion bundles.
+    default: ''
+
+outputs:
+  evidence-directory:
+    description: Job-local completion bundle, including exact attempt attribution.
+    value: ${{ steps.result.outputs.evidence-directory }}
+
+runs:
+  using: composite
+  steps:
+    # The implementation path exists independently of caller checkout, setup and
+    # tool installation. Ref: docs/implementation.md, "Workflow result cards".
+    - id: result
+      shell: pwsh
+      env:
+        CBH_ACTION_PATH: ${{ github.action_path }}
+        CBH_RESULT_INPUTS: ${{ toJSON(inputs) }}
+        CBH_JOB_STATUS: ${{ job.status }}
+        CBH_EVENT_ACTION: ${{ github.event.action }}
+        CBH_FORK: ${{ github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository }}
+        GH_TOKEN: ${{ inputs.stage == 'backfill-selection' && github.token || '' }}
+      run: |
+        & (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'Run-WorkflowResults.ps1')
