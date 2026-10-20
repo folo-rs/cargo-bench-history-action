@@ -895,12 +895,11 @@ Describe 'CI bootstrap update coverage' {
         @($references | Select-Object -Unique).Count | Should -Be 1
     }
 
-    It 'checks workflow action references weekly through Dependabot' {
-        $dependabot = Get-Content (Join-Path $root '.github\dependabot.yml') -Raw | ConvertFrom-Yaml
-        $dependabot.version | Should -Be 2
-        $updates = @($dependabot.updates | Where-Object { $_['package-ecosystem'] -ceq 'github-actions' })
-        $updates.Count | Should -Be 1
-        $updates[0].directory | Should -BeExactly '/'
-        $updates[0].schedule.interval | Should -BeExactly 'weekly'
+    It 'leaves version updates to manual review without Dependabot configuration' {
+        # Both GitHub-supported filenames must remain absent for manual updates.
+        # Ref: docs/implementation.md, "CI evidence".
+        foreach ($file in @('dependabot.yml', 'dependabot.yaml')) {
+            Test-Path -LiteralPath (Join-Path $root ".github\$file") | Should -BeFalse
+        }
     }
 }
