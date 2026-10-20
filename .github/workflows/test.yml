@@ -137,6 +137,11 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:CANARY_KEY)) { throw 'Collection emitted no machine key.' }
           & .\tests\Invoke-BackfillCanary.ps1 -Workspace $env:CANARY_WORKSPACE `
             -Store $env:CANARY_STORE -MachineKey $env:CANARY_KEY
+          . .\tests\Invoke-BackfillCanary.ps1
+          $tool = Get-CanaryCollectionTool -Workspace $env:CANARY_WORKSPACE -TemporaryDirectory $env:RUNNER_TEMP
+          $companion = Get-CanaryCollectionTool -Workspace $env:CANARY_WORKSPACE -TemporaryDirectory $env:RUNNER_TEMP -Role companion
+          & .\tests\Assert-BackfillCompletion.ps1 -Tool $tool -Companion $companion `
+            -Workspace $env:CANARY_WORKSPACE -Directory (Join-Path $env:RUNNER_TEMP 'completion-canary')
       - name: Record the exact collection and preserve its local baseline fixture
         id: evidence
         shell: pwsh
@@ -287,6 +292,7 @@ jobs:
           }
           $tools = Install-WorkflowTool $context (Read-ActionManifest .\release.json)
           $context.companion = $tools.companion
+          "companion=$($tools.companion)" >> $env:GITHUB_OUTPUT
           Invoke-WorkflowOperation reconcile $context -Instance $env:CANARY_INSTANCE `
             -Head $env:CANARY_HEAD -Platforms $env:CANARY_PLATFORM
       - name: Analyze with source-built tools
@@ -317,6 +323,28 @@ jobs:
         run: |
           & .\tests\Assert-Canary.ps1 -Workspace $env:CANARY_WORKSPACE -Store $env:CANARY_STORE `
             -MachineKey $env:CANARY_KEY -CollectionJson $env:CANARY_COLLECTION -AnalysisJson $env:CANARY_ANALYSIS
+      - name: Verify offline Actions result cards
+        if: steps.analyze.outputs.skipped != 'true'
+        shell: pwsh
+        env:
+          CANARY_COMPANION: ${{ steps.collection.outputs.companion }}
+          CANARY_ANALYSIS: ${{ toJSON(steps.analyze.outputs) }}
+          CANARY_HEAD: ${{ steps.fixture.outputs.head }}
+          CANARY_PLATFORM: ${{ matrix.runner }}
+        run: |
+          & .\tests\Assert-WorkflowResults.ps1 -Companion $env:CANARY_COMPANION `
+            -Directory (Join-Path $env:RUNNER_TEMP 'result-canary') -AnalysisJson $env:CANARY_ANALYSIS `
+            -AnalyzedSha $env:CANARY_HEAD -Platform $env:CANARY_PLATFORM
+      - name: Verify authenticated backfill discovery and unavailable evidence
+        if: steps.analyze.outputs.skipped != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANARY_COMPANION: ${{ steps.collection.outputs.companion }}
+          CANARY_PLATFORM: ${{ matrix.runner }}
+        run: |
+          & .\tests\Assert-BackfillSelection.ps1 -Companion $env:CANARY_COMPANION `
+            -Directory (Join-Path $env:RUNNER_TEMP 'backfill-selection-canary') -Platform $env:CANARY_PLATFORM
       - name: Upload emitted reports through the consumer artifact action
         id: upload-reports
         if: ${{ !cancelled() && steps.analyze.outcome == 'success' && steps.analyze.outputs.skipped != 'true' }}

@@ -133,6 +133,25 @@ The optional benchmark setup action has one fixed caller-owned location:
 tool-version or publication-wording overrides. `publish: false` suppresses report,
 lifecycle and alert writes without suppressing analysis or report artifacts.
 
+### Actions result cards
+
+Reusable workflows write an Actions summary independently of issue/comment
+publication. Cards distinguish execution, analysis, platform completeness and
+publication. A completed publication request can be a legitimate lifecycle no-op;
+it does not promise a new post. Findings remain advisory and a useful partial
+report never changes a failed collection job's conclusion.
+
+Cards include readable scope and coverage, the frozen commit, available artifact
+and run links, and a next action. First-run insufficient evidence and explicit
+empty scope remain distinct from missing or failed reports. Live-head freshness
+is unknown unless actually observed. No report, count or successful benchmark
+verdict is inferred from absent evidence.
+
+Preparation or tool-installation failures receive a minimal execution-only card
+with the failed stage and run/log link, independent of the companion. Renderer
+failures also retain diagnostics and fail their step. Finalization requires a
+runner; hard cancellation can prevent the final summary write.
+
 The shared workflows use the selected workflow commit's own root action and
 internal adapter, independently of the caller checkout. Runtime files and
 measurement checkouts are separate from invocation configuration and tool sources.
@@ -190,8 +209,21 @@ build/benchmark failure policy, not infrastructure failures. The workflow does
 not suppress job failures or hosted timeout cancellations.
 
 Backfill uses history's same-repository/open-event work selection and excludes
-`pull_request_target`. It produces no receipts, analysis, reports, publication or
-public workflow outputs.
+`pull_request_target`. It produces completion artifacts and a collection-only
+Actions card, but no collection receipts, analysis, benchmark reports, publication
+or public workflow outputs.
+
+Completion evidence records the frozen inclusive range, total commits, stored,
+skipped-existing, empty, failed and deferred counts, overwrite mode and stop
+reason. A commit limit is a bounded successful completion, not a timeout.
+A stopping benchmark failure can supply final accounting while execution remains
+failed. Infrastructure failure or interruption may supply no final accounting;
+missing legs and completion files remain unavailable, not zero.
+
+Evidence belongs to the exact project, run, platform and executed attempt. The
+latest execution supersedes previous completions, including failure and policy
+skip. An untouched successful leg remains eligible only with verified job-history
+provenance. Backfill never starts an analysis or publication phase.
 
 ### Measurement compiler flags
 
@@ -239,8 +271,9 @@ that permission. This server-enforced restriction, not an editable `if`, is the
 default storage authorization barrier. The production and separate test identities
 retain their selected-branch and ordinary-PR federation contexts.
 
-Notification depends on obtaining the companion. An installation failure leaves the
-workflow failed and can prevent an issue alert; there is no independent fallback.
+Issue notification depends on obtaining the companion. An installation failure
+leaves the workflow failed and can prevent an issue alert. The Actions card has
+an independent execution-only fallback, not an alternative publisher.
 
 ## Releases
 
@@ -255,7 +288,7 @@ Older release runs cannot move the floating major tag backwards.
 
 Changes to distributed runtime, consumer reusable workflows or manifest pins require
 a newer action version. Documentation, tests and CI-only maintenance can retain the
-current version. Incompatible public action or workflow input changes require a
+current version. Incompatible public action/workflow inputs or required permissions require a
 new major version; compatible feature additions use a minor version.
 Publication may reconcile a missing release or major ref on retry, but unchanged
 release-bearing content never relocates the immutable version tag.

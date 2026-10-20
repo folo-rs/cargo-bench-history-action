@@ -77,6 +77,9 @@ Describe 'Workflow adapter' {
                 $context['working-directory'] | Should -Be (Join-Path $workspace '.bench-history\project')
                 $context['state-path'].StartsWith($temp, [StringComparison]::Ordinal) | Should -BeTrue
                 $context['receipts-directory'] | Should -Not -Be $context['current-collection-directory']
+                [IO.Path]::IsPathFullyQualified($context['completion-file']) | Should -BeTrue
+                $context['completion-file'].StartsWith($script:temp, [StringComparison]::Ordinal) | Should -BeTrue
+                Test-Path -LiteralPath $context['completion-file'] | Should -BeFalse
                 Test-Path -LiteralPath $context['receipts-directory'] | Should -BeTrue
                 Test-Path -LiteralPath $context['current-collection-directory'] | Should -BeFalse
                 $context.ContainsKey('machine-key-file') | Should -BeFalse

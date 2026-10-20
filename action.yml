@@ -60,6 +60,9 @@ inputs:
   max-commits:
     description: Backfill only; positive integer limit on attempted commits after skipping existing measurements. Empty means unlimited.
     default: ''
+  completion-output:
+    description: Backfill only; new completion JSON path, relative to working-directory or absolute. Retain this path to recover final accounting after a benchmark failure.
+    default: ''
   ignore-errors:
     description: Continue backfill after individual measurement failures (true or false).
   body-file:
@@ -103,7 +106,7 @@ outputs:
     description: Exact collection snapshot path when collection-snapshot is true.
     value: ${{ steps.invoke.outputs.collection-file }}
   outcome:
-    description: Machine-readable analysis outcome.
+    description: Machine-readable outcome from successful analysis, not execution or publication status.
     value: ${{ steps.invoke.outputs.outcome }}
   notable:
     description: Whether the analysis contains notable changes.
@@ -124,7 +127,7 @@ outputs:
     description: Condensed Markdown summary path.
     value: ${{ steps.invoke.outputs.report-summary }}
   publication-state:
-    description: Validated report publication state (findings, clean or inconclusive).
+    description: Checked report disposition (findings, clean or inconclusive), not confirmation of a GitHub write.
     value: ${{ steps.invoke.outputs.publication-state }}
   can-clear:
     description: Whether history evidence permits an all-clear annotation.

@@ -204,6 +204,9 @@ exit ([int] $env:CBH_FIXTURE_EXIT)
         @{ command = 'analyze-history'; inputName = 'current-collections'; value = "selected with 'quotes'; `$literal" }
         @{ command = 'analyze-pr'; inputName = 'current-collections'; value = 'selected' }
         @{ command = 'backfill'; inputName = 'current-collections'; value = '' }
+        @{ command = 'backfill'; inputName = 'completion-output'; value = "new completion; '`$literal'.json" }
+        @{ command = 'backfill'; inputName = 'completion-output'; value = '' }
+        @{ command = 'collect'; inputName = 'completion-output'; value = '' }
     ) {
         Invoke-Preparation @{ command = $command; $inputName = $value; 'on-existing' = 'skip' } | Out-Null
         & $script:entryPoint -Stage install
