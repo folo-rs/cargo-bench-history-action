@@ -360,9 +360,10 @@ reviewed full commit SHA from upstream `master` and explicitly select
 [`master` history](https://github.com/dtolnay/rust-toolchain#choice-of-full-length-commit-sha);
 its generated compiler-selection branches are not durable sources for SHA pins.
 
-Dependabot version-update PRs are disabled through `open-pull-requests-limit: 0`;
-this limit does not disable security-update PRs. Maintainers review GitHub Actions
-reference updates manually. Bootstrap updates retain the full SHA and compiler input;
+The repository has no Dependabot configuration for version-update PRs.
+Security-update PRs remain controlled by the repository's security settings.
+Maintainers review GitHub Actions reference updates manually.
+Bootstrap updates retain the full SHA and compiler input;
 reviewers verify membership in upstream `master` and inspect implementation changes.
 The upstream [`v1` tag is unsupported](https://github.com/dtolnay/rust-toolchain/issues/114)
 and is not a release-approval signal.
