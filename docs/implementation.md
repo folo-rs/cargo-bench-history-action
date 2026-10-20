@@ -416,8 +416,8 @@ permitted, but can never establish the required prebuilt evidence. The standalon
 skipped. A future/unpublished pin or missing archive is a real failure.
 
 Canaries create a committed, dependency-free Cargo workspace outside the action and
-Folo checkouts. The workspace is virtual: its benchmark belongs to a non-root member,
-because the companion's package-ownership library excludes workspace-root packages. The root
+Folo checkouts. The workspace is virtual: its benchmark belongs to a non-root member
+to exercise member ownership independently of a root package. The root
 still owns the benchmark-history configuration. Its small benchmark entry point
 delegates to the manifest-pinned faker, producing deterministic engine output without
 wall-clock measurements. Fixed Git dates keep fixture commit identities stable
