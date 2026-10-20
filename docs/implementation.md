@@ -367,15 +367,13 @@ reviewed full commit SHA from upstream `master` and explicitly select
 [`master` history](https://github.com/dtolnay/rust-toolchain#choice-of-full-length-commit-sha);
 its generated compiler-selection branches are not durable sources for SHA pins.
 
-Dependabot checks GitHub Actions references weekly and proposes updates for review,
-not automatic merging. Bootstrap updates retain the full SHA and compiler input;
-reviewers verify membership in upstream `master` and inspect the implementation
-changes before accepting a proposal. Dependabot infers its update source from the
-SHA's matching tag or containing branch, not from the compiler input or comments.
+The repository has no Dependabot configuration for version-update PRs.
+Security-update PRs remain controlled by the repository's security settings.
+Maintainers review GitHub Actions reference updates manually.
+Bootstrap updates retain the full SHA and compiler input;
+reviewers verify membership in upstream `master` and inspect implementation changes.
 The upstream [`v1` tag is unsupported](https://github.com/dtolnay/rust-toolchain/issues/114)
-and is not a release-approval signal. Check the first Dependabot update log after
-enabling the configuration on the default branch, and inspect its selected source
-if upstream `master` advances without a proposal.
+and is not a release-approval signal.
 
 Manifest tool pins and explicit action inputs such as cargo-binstall's `version`
 remain separately maintained. Dependency updates still obey version-readiness and
