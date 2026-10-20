@@ -187,6 +187,13 @@ package list and does not also forward exclusions, which preparation already app
 Namespace normalization, dependency closure, report classification and receipt
 selection remain Rust-owned.
 
+The companion ignores unknown, unowned and outside-workspace paths for PR scope
+instead of treating them as workspace changes. It explicitly recognizes shared
+workspace-root Cargo manifests, lockfiles, toolchain files and Cargo configuration
+as workspace-wide inputs. Package ownership and dependent expansion remain in
+Rust; PowerShell does not classify changed paths. Empty selection uses the existing
+`skip-all` handoff, while history continues to select the workspace.
+
 History/PR workflow-wide cancellation uses repository, flow and configuration location plus the
 PR or commit identity available before any job runs. Job queues and sink serialization
 use the canonical project identity from preparation. This avoids a nested workflow

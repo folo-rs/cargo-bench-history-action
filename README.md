@@ -65,6 +65,11 @@ checkout, the platform matrix, rerun-safe collection, receipt reconciliation,
 analysis, report upload, publication and concurrency. The `closed` event cancels
 superseded PR work without starting another collection.
 
+Unknown, unrelated and outside-workspace changed paths do not add PR benchmark
+scope. Known workspace-root Cargo manifests, lockfiles, toolchain files and Cargo
+configuration select the workspace. A PR with no selected benchmark packages
+starts no collection or analysis; history remains workspace-wide.
+
 Collection defaults to x64 Linux and Windows. Apple Silicon macOS is also supported;
 set `platforms: ubuntu-latest,windows-latest,macos-latest` in each caller's `with:`
 block to include it. The workspace's benchmarks and their dependencies must support
