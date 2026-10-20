@@ -187,6 +187,13 @@ package list and does not also forward exclusions, which preparation already app
 Namespace normalization, dependency closure, report classification and receipt
 selection remain Rust-owned.
 
+The companion ignores unknown, unowned and outside-workspace paths for PR scope
+instead of treating them as workspace changes. It explicitly recognizes shared
+workspace-root Cargo manifests, lockfiles, toolchain files and Cargo configuration
+as workspace-wide inputs. Package ownership and dependent expansion remain in
+Rust; PowerShell does not classify changed paths. Empty selection uses the existing
+`skip-all` handoff, while history continues to select the workspace.
+
 History/PR workflow-wide cancellation uses repository, flow and configuration location plus the
 PR or commit identity available before any job runs. Job queues and sink serialization
 use the canonical project identity from preparation. This avoids a nested workflow
@@ -407,8 +414,8 @@ permitted, but can never establish the required prebuilt evidence. The standalon
 skipped. A future/unpublished pin or missing archive is a real failure.
 
 Canaries create a committed, dependency-free Cargo workspace outside the action and
-Folo checkouts. The workspace is virtual: its benchmark belongs to a non-root member,
-because the companion's package-ownership library excludes workspace-root packages. The root
+Folo checkouts. The workspace is virtual: its benchmark belongs to a non-root member
+to exercise member ownership independently of a root package. The root
 still owns the benchmark-history configuration. Its small benchmark entry point
 delegates to the manifest-pinned faker, producing deterministic engine output without
 wall-clock measurements. Fixed Git dates keep fixture commit identities stable

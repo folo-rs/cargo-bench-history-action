@@ -9,6 +9,14 @@ History measures the workspace, while PR preparation selects affected benchmark
 packages and dependents before applying exclusions. There is no separate consumer
 scope selector.
 
+PR selection favors avoiding unnecessary benchmark work: unknown, unowned and
+outside-workspace changed paths contribute no scope. Package-owned changes still
+select affected benchmark packages and their dependents. Known workspace-root
+Cargo manifests, lockfiles, toolchain files and Cargo configuration explicitly
+select the workspace. An unrelated path neither expands nor suppresses scope
+selected by another changed path. History remains workspace-wide to provide
+coverage across commits.
+
 The root composite action exposes the same stages for custom job graphs. Those
 advanced callers own checkout, benchmark prerequisites, dependencies, concurrency
 and artifact upload/download.
