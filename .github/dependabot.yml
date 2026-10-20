@@ -2,7 +2,9 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    # Disable version-update PRs without disabling security updates.
+    # Ref: docs/implementation.md, "CI evidence".
+    open-pull-requests-limit: 0
     schedule:
-      # Propose updates for review without changing the rolling compiler channel.
-      # Ref: docs/implementation.md, "CI evidence".
+      # Dependabot requires a schedule even when version-update PRs are disabled.
       interval: weekly
