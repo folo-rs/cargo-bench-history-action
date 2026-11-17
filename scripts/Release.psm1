@@ -81,7 +81,8 @@ function Test-ReleaseBearingPath {
     if ($Path -clike '.github/actions/*') { return $true }
     if ($Path -clike 'scripts/*') {
         return $Path -cnotin @(
-            'scripts/Release.psm1', 'scripts/Publish-Release.ps1', 'scripts/Install-Canary.ps1'
+            'scripts/Release.psm1', 'scripts/Publish-Release.ps1', 'scripts/Install-Canary.ps1',
+            'scripts/Assert-RunnerCapacity.ps1'
         )
     }
     if ($Path -clike '.github/workflows/*') {

@@ -13,14 +13,34 @@ jobs:
     if: github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/install-tools.yml
 
-  publish:
+  install-tools:
     needs: availability
-    if: github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
+    if: always() && github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require every real installation canary except proven macOS acquisition failures
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAPACITY_HEAD: ${{ github.sha }}
+        run: |
+          & .\scripts\Assert-RunnerCapacity.ps1 -Scope installation
+
+  publish:
+    needs: install-tools
+    if: always() && needs.install-tools.result == 'success' && github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     # Only the mutation job is serialized; an old queued run re-reads current refs.
-    # No release/tag writes occur unless the shared availability workflow succeeded.
+    # The checked gate, not a cancelled matrix's raw result, authorizes this job.
     concurrency:
       group: action-release-publication
       cancel-in-progress: false

@@ -410,8 +410,33 @@ Root-action method canaries disable installation-cache restore/save with
 `CBH_ACTION_DISABLE_CACHE=true`. Their fresh installs exercise collection and
 analysis after the strict availability probe; ordinary consumer fallback remains
 permitted, but can never establish the required prebuilt evidence. The standalone
-`install-tools` aggregate fails if any availability leg fails, is cancelled or is
-skipped. A future/unpublished pin or missing archive is a real failure.
+`install-tools` aggregate verifies each manifest-derived logical installation job
+using `scripts/Assert-RunnerCapacity.ps1`. It fails for real failures, skipped jobs,
+missing/ambiguous evidence and unknown cancellations. A future/unpublished pin or
+missing archive is a real failure.
+
+The sole exception is a completed, cancelled `macos-latest` / `aarch64-apple-darwin`
+job with an explicitly empty step list, no assigned runner, the macOS runner label,
+and the exact failure annotation
+`The job was not acquired by Runner of type hosted even after multiple attempts`.
+Other failure annotations prevent exemption. Read-only Actions/checks API access
+binds evidence to the exact run, head, attempt and checked-out release manifest.
+All paginated job attempts are read; the unique newest execution of each expected
+logical job is authoritative, including untouched older successes. A newer failure
+never falls back to older evidence. Lookup errors fail closed.
+
+Accepted capacity cancellations emit a warning and an explicit missing-evidence
+summary; they do not prove package/archive availability. The release workflow uses
+the same checked aggregate rather than the reusable workflow's raw cancelled result.
+Promised targets, real installer/archive checks and consumer workflows are unchanged.
+
+The required `macos-capacity` aggregate applies the same checks to Pester and source
+canaries, replacing only the directly required macOS Pester/source contexts in the
+repository ruleset. All other required contexts, including `install-tools`, remain.
+Source analysis runs independently of the collection matrix's aggregate result.
+Each platform first verifies its own completed collector; only a proven unavailable
+macOS collector suppresses that platform's downstream steps with a warning. Linux
+and Windows source analysis still run. Arbitrary dependent skips are not exempt.
 
 Canaries create a committed, dependency-free Cargo workspace outside the action and
 Folo checkouts. The workspace is virtual: its benchmark belongs to a non-root member
@@ -487,7 +512,8 @@ selective upstream retry handling is tracked in
 
 Release-bearing paths are `action.yml`/`action.yaml`, `release.json`, scripts,
 private actions and workflow definitions. The CI-only exemptions are `scripts/Release.psm1`,
-`scripts/Publish-Release.ps1`, `scripts/Install-Canary.ps1` and the `test.yml`,
+`scripts/Publish-Release.ps1`, `scripts/Install-Canary.ps1`,
+`scripts/Assert-RunnerCapacity.ps1` and the `test.yml`,
 `install-tools.yml`, `release.yml` workflows. New scripts and consumer reusable
 workflows are release-bearing by default. Documentation, tests and the canary
 source revision do not require a version increment. Git tree identity includes

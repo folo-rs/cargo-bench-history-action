@@ -289,6 +289,14 @@ The required `install-tools` check installs the exact registry packages and thei
 promised prebuilt archives for every supported target. Neither `path`, a cache hit
 nor source fallback establishes availability. It runs on PRs and merge candidates.
 
+Hosted `macos-latest` runner acquisition is the sole availability exception. A
+cancelled job with no executed steps and GitHub's exact runner-acquisition failure
+annotation may be non-blocking; its missing evidence is disclosed, never called a
+passing installation. Real macOS test/install failures, unavailable packages or
+archives, unknown cancellations and every non-macOS failure remain blocking.
+The same narrow exception applies to this repository's source and Pester canaries,
+not to consumer benchmark execution or report semantics.
+
 Merge to `main` triggers the same availability gate before release publication.
 Version tags are immutable. Retries reconcile partial publication; a later commit
 with unchanged release-bearing content does not relocate an existing version tag.

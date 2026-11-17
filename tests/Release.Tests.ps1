@@ -18,7 +18,8 @@ Describe 'Release-bearing paths' {
         'README.md', 'docs/design.md', 'tests/Release.Tests.ps1',
         '.github/monorepo-revision', '.github/workflows/test.yml',
         '.github/workflows/install-tools.yml', '.github/workflows/release.yml',
-        'scripts/Release.psm1', 'scripts/Publish-Release.ps1', 'scripts/Install-Canary.ps1'
+        'scripts/Release.psm1', 'scripts/Publish-Release.ps1', 'scripts/Install-Canary.ps1',
+        'scripts/Assert-RunnerCapacity.ps1'
     ) {
         Test-ReleaseBearingPath $_ | Should -BeFalse
     }
