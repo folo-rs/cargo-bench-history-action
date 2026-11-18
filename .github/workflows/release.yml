@@ -13,14 +13,28 @@ jobs:
     if: github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/install-tools.yml
 
-  publish:
+  install-tools:
     needs: availability
-    if: github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
+    if: always() && github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Linux and Windows installations and all promised archives
+        shell: pwsh
+        env:
+          AVAILABILITY_RESULT: ${{ needs.availability.result }}
+        run: |
+          if ($env:AVAILABILITY_RESULT -cne 'success') {
+            throw "Published tool availability did not pass: $env:AVAILABILITY_RESULT"
+          }
+
+  publish:
+    needs: install-tools
+    if: always() && needs.install-tools.result == 'success' && github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     # Only the mutation job is serialized; an old queued run re-reads current refs.
-    # No release/tag writes occur unless the shared availability workflow succeeded.
+    # Required availability does not depend on advisory macOS native canaries.
     concurrency:
       group: action-release-publication
       cancel-in-progress: false

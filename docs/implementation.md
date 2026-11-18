@@ -356,6 +356,38 @@ is executed against real GitHub publication endpoints by local tests.
 
 ### CI evidence
 
+#### Advisory macOS CI
+
+Hosted macOS runners are unreliable on capacity grounds, so native macOS checks
+are always advisory. `test-macos.yml` invokes `test.yml` with the internal
+`macos-advisory: true` input, selecting only macOS targets from `release.json`.
+Normal validation and the release workflow select only Linux/Windows native
+installation targets. Pester and source canaries use the same split.
+No required job depends on the macOS workflow, so queued macOS jobs do not delay
+required source analysis, `install-tools`, merging or publication.
+
+Keep macOS checks green: investigate and fix observed regressions rather than
+dismissing them as capacity problems. Merges need not wait for queued/unrun
+macOS checks. Actual failures/cancellations remain visible in the advisory
+workflow; no `continue-on-error` masks them. No annotation API, capacity detector
+or skipped-job inference is needed. The former `macos-capacity` required context
+is removed; all existing non-macOS required contexts remain.
+
+The required `install-tools` aggregate accepts only a successful Linux/Windows
+availability workflow. That workflow also runs `Install-Canary.ps1 -ArchivesOnly`
+on Ubuntu: download every promised archive and sibling checksum for every
+manifest tool and target, including macOS, then verify archive identity and
+SHA-256 bytes. This uses the same download/checksum helper as native installation
+checks, but never executes foreign binaries or claims native installation
+evidence. Missing or corrupt macOS archives still block without a macOS runner.
+Native registry and prebuilt installation remain required on Linux/Windows and
+visible as advisory checks on macOS. Publication uses the same required gate.
+
+Supported targets, tool/source pins and consumer history/backfill, benchmark,
+report and storage semantics are unchanged.
+
+#### Canary execution and installation evidence
+
 `test.yml` runs fast Pester tests, version readiness and source-path smoke independently
 of the published-tool gate. Source smoke checks out the exact monorepo revision into
 `Folo`; neither its source path nor its isolated measurement workspace selects a
@@ -379,8 +411,8 @@ Manifest tool pins and explicit action inputs such as cargo-binstall's `version`
 remain separately maintained. Dependency updates still obey version-readiness and
 published-availability gates.
 
-The shared `install-tools.yml` workflow derives an install/binstall matrix from the
-current checkout's manifest, not a released action. Each leg checks that the Rust
+The shared `install-tools.yml` workflow derives its selected install/binstall matrix
+from the current checkout's manifest, not a released action. Each leg checks that the Rust
 host matches its declared target and uses absent installation roots. It downloads
 every promised monorepo `.zip` and sibling `.sha256`, checks the downloaded archive
 against the sidecar, and calls the same installer used by consumers. Sidecar checking
@@ -409,9 +441,10 @@ and archive availability.
 Root-action method canaries disable installation-cache restore/save with
 `CBH_ACTION_DISABLE_CACHE=true`. Their fresh installs exercise collection and
 analysis after the strict availability probe; ordinary consumer fallback remains
-permitted, but can never establish the required prebuilt evidence. The standalone
-`install-tools` aggregate fails if any availability leg fails, is cancelled or is
-skipped. A future/unpublished pin or missing archive is a real failure.
+permitted, but can never establish the required prebuilt evidence. A
+future/unpublished pin or missing archive is a real failure.
+[macOS native execution is advisory](#advisory-macos-ci), not replacement
+published-binary evidence.
 
 Canaries create a committed, dependency-free Cargo workspace outside the action and
 Folo checkouts. The workspace is virtual: its benchmark belongs to a non-root member
@@ -459,8 +492,9 @@ to read their configured shared history and upload only collection receipts.
 
 Fork-triggered canaries instead assert the root action's explicit fork skip for both
 commands and reject any claimed collection or report evidence. This never bypasses
-published availability: every exact registry/prebuilt installation, asset check and
-fixture-tool smoke runs before these invocations on all triggers. GitHub's event
+published availability: each selected native registry/prebuilt installation and
+fixture-tool smoke runs before these invocations on all triggers, and all-target
+archive availability remains required independently of advisory macOS execution. GitHub's event
 context is preserved, not replaced with synthetic same-repository provenance.
 
 After successful, non-skipped analysis, each source and published-method canary
@@ -487,7 +521,7 @@ selective upstream retry handling is tracked in
 
 Release-bearing paths are `action.yml`/`action.yaml`, `release.json`, scripts,
 private actions and workflow definitions. The CI-only exemptions are `scripts/Release.psm1`,
-`scripts/Publish-Release.ps1`, `scripts/Install-Canary.ps1` and the `test.yml`,
+`scripts/Publish-Release.ps1`, `scripts/Install-Canary.ps1` and the `test.yml`, `test-macos.yml`,
 `install-tools.yml`, `release.yml` workflows. New scripts and consumer reusable
 workflows are release-bearing by default. Documentation, tests and the canary
 source revision do not require a version increment. Git tree identity includes

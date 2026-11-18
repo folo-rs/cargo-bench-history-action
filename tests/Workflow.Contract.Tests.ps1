@@ -612,6 +612,117 @@ Describe 'Actions result graph for <flow>' -ForEach @(
     }
 }
 
+Describe 'Independent advisory macOS CI' {
+    BeforeAll {
+        $script:validationWorkflow = Get-Content (Join-Path $root '.github\workflows\test.yml') -Raw | ConvertFrom-Yaml
+        $script:advisoryWorkflow = Get-Content (Join-Path $root '.github\workflows\test-macos.yml') -Raw | ConvertFrom-Yaml
+        $script:availabilityWorkflow = Get-Content (Join-Path $root '.github\workflows\install-tools.yml') -Raw | ConvertFrom-Yaml
+        $script:releaseWorkflow = Get-Content (Join-Path $root '.github\workflows\release.yml') -Raw | ConvertFrom-Yaml
+    }
+
+    It 'selects disjoint native platforms in the actual <workflow> matrix producer (macOS=<macos>)' -ForEach @(
+        @{ workflow = 'validation'; macos = $false }
+        @{ workflow = 'validation'; macos = $true }
+        @{ workflow = 'availability'; macos = $false }
+        @{ workflow = 'availability'; macos = $true }
+    ) {
+        $definition = if ($workflow -ceq 'validation') { $validationWorkflow } else { $availabilityWorkflow }
+        $producer = if ($workflow -ceq 'validation') { $definition.jobs.setup } else { $definition.jobs.matrix }
+        $step = @($producer.steps | Where-Object { $_['id'] -ceq 'manifest' })[0]
+        $step.env.MACOS_ADVISORY | Should -Match 'inputs.macos-advisory'
+        $oldOutput = $env:GITHUB_OUTPUT
+        $oldAdvisory = $env:MACOS_ADVISORY
+        Push-Location $root
+        try {
+            $env:GITHUB_OUTPUT = Join-Path $TestDrive "$workflow-$macos.txt"
+            $env:MACOS_ADVISORY = $macos.ToString().ToLowerInvariant()
+            & ([scriptblock]::Create($step.run))
+            $matrixLine = @(Get-Content $env:GITHUB_OUTPUT | Where-Object { $_.StartsWith('matrix=') })[0]
+            $legs = @((($matrixLine -replace '^matrix=', '') | ConvertFrom-Json).include)
+            $expected = @($manifest.targets | Where-Object { ($_.os -ceq 'macOS') -eq $macos })
+            @($legs.runner | Sort-Object -Unique) | Should -Be @($expected.runner | Sort-Object -Unique)
+            @($legs.rust_target | Sort-Object -Unique) | Should -Be @($expected.rust_target | Sort-Object -Unique)
+            if ($workflow -ceq 'availability') {
+                $legs.Count | Should -Be ($expected.Count * 2)
+                @($legs.method | Sort-Object -Unique) | Should -Be @('binstall', 'install')
+            } else {
+                $legs.Count | Should -Be $expected.Count
+            }
+        } finally {
+            $env:GITHUB_OUTPUT = $oldOutput
+            $env:MACOS_ADVISORY = $oldAdvisory
+            Pop-Location
+        }
+    }
+
+    It 'runs macOS through a separate workflow without required dependencies or masked failures' {
+        @($advisoryWorkflow.on.Keys | Sort-Object) | Should -Be @(
+            'merge_group', 'pull_request', 'push', 'workflow_dispatch'
+        )
+        $advisoryWorkflow.jobs.macos.uses | Should -Be './.github/workflows/test.yml'
+        $advisoryWorkflow.jobs.macos.with['macos-advisory'] | Should -BeTrue
+        $advisoryWorkflow.jobs.macos.ContainsKey('continue-on-error') | Should -BeFalse
+        $advisoryWorkflow.permissions.actions | Should -Be 'read'
+        foreach ($workflow in @($validationWorkflow, $availabilityWorkflow)) {
+            $workflow.on.workflow_call.inputs['macos-advisory'].default | Should -BeFalse
+        }
+        foreach ($job in $validationWorkflow.jobs.Values) {
+            @($job['needs']) | Should -Not -Contain 'macos'
+            $job.ContainsKey('continue-on-error') | Should -BeFalse
+        }
+        foreach ($id in @('pester', 'path-collect', 'path-smoke')) {
+            $validationWorkflow.jobs[$id].strategy.matrix | Should -BeExactly '${{ fromJSON(needs.setup.outputs.matrix) }}'
+        }
+        $validationWorkflow.jobs['path-smoke'].if | Should -BeExactly "always() && needs.setup.result == 'success'"
+        $validationWorkflow.jobs.availability.with['macos-advisory'] |
+            Should -BeExactly '${{ inputs.macos-advisory || false }}'
+    }
+
+    It 'keeps all-target archive verification on Ubuntu in required availability' {
+        $archives = $availabilityWorkflow.jobs.archives
+        $archives.if | Should -BeExactly '${{ !inputs.macos-advisory }}'
+        $archives['runs-on'] | Should -Be 'ubuntu-latest'
+        $step = @($archives.steps | Where-Object { $_['run'] })[0]
+        $step.run | Should -Match 'Install-Canary\.ps1 -ArchivesOnly -Root'
+        $step.run | Should -Not -Match '-RustTarget'
+    }
+
+    It 'fails required source checks instead of silently skipping after failed collection' {
+        $precheck = $validationWorkflow.jobs['path-smoke'].steps[0]
+        $precheck.env.COLLECTION_RESULT | Should -BeExactly '${{ needs.path-collect.result }}'
+        $oldResult = $env:COLLECTION_RESULT
+        try {
+            foreach ($state in @('success', 'failure', 'cancelled', 'skipped')) {
+                $env:COLLECTION_RESULT = $state
+                if ($state -ceq 'success') { { & ([scriptblock]::Create($precheck.run)) } | Should -Not -Throw }
+                else { { & ([scriptblock]::Create($precheck.run)) } | Should -Throw '*Source collection did not pass*' }
+            }
+        } finally { $env:COLLECTION_RESULT = $oldResult }
+    }
+
+    It 'gates validation and publication on the non-macOS availability result alone' {
+        foreach ($workflow in @($validationWorkflow, $releaseWorkflow)) {
+            $workflow.jobs.availability.uses | Should -Be './.github/workflows/install-tools.yml'
+            $gate = $workflow.jobs['install-tools']
+            $gate.needs | Should -Be 'availability'
+            $gate.if | Should -Match '^always\(\)'
+            $step = @($gate.steps | Where-Object { $_['run'] })[0]
+            $step.env.AVAILABILITY_RESULT | Should -BeExactly '${{ needs.availability.result }}'
+            foreach ($state in @('success', 'failure', 'cancelled', 'skipped')) {
+                $oldResult = $env:AVAILABILITY_RESULT
+                try {
+                    $env:AVAILABILITY_RESULT = $state
+                    if ($state -ceq 'success') { { & ([scriptblock]::Create($step.run)) } | Should -Not -Throw }
+                    else { { & ([scriptblock]::Create($step.run)) } | Should -Throw '*Published tool availability did not pass*' }
+                } finally { $env:AVAILABILITY_RESULT = $oldResult }
+            }
+        }
+        $releaseWorkflow.jobs.availability.ContainsKey('with') | Should -BeFalse
+        $releaseWorkflow.jobs.publish.needs | Should -Be 'install-tools'
+        $releaseWorkflow.jobs.publish.if | Should -Match "needs.install-tools.result == 'success'"
+    }
+}
+
 Describe 'Canary workflow wiring in <file>' -ForEach @(
     @{ file = 'test'; jobName = 'path-smoke' }
     @{ file = 'install-tools'; jobName = 'published' }

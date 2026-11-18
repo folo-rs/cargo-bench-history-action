@@ -285,9 +285,21 @@ an independent execution-only fallback, not an alternative publisher.
 
 ## Releases
 
-The required `install-tools` check installs the exact registry packages and their
-promised prebuilt archives for every supported target. Neither `path`, a cache hit
-nor source fallback establishes availability. It runs on PRs and merge candidates.
+The required `install-tools` check installs exact registry packages and prebuilt
+binaries on Linux and Windows. It also downloads and verifies promised archives
+and checksums for **every** supported target, including macOS, without needing
+a macOS runner. Neither `path`, a cache hit nor source fallback establishes
+published-binary availability. It runs on PRs and merge candidates.
+
+macOS native validation is always advisory because hosted macOS runner capacity
+is unreliable. It runs in a separate workflow: required checks and release
+publication do not wait for it, even while macOS jobs sit queued. Agents must
+keep advisory checks green and investigate/fix observed regressions, but unrun
+checks need not delay merging. Outcomes stay visible without being rewritten as
+success. There is no capacity-detection exception or annotation parser.
+Linux/Windows checks and all promised archive/checksum checks remain blocking.
+See [advisory macOS CI](implementation.md#advisory-macos-ci).
+Consumer benchmark, history/backfill and report semantics are unchanged.
 
 Merge to `main` triggers the same availability gate before release publication.
 Version tags are immutable. Retries reconcile partial publication; a later commit

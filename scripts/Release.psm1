@@ -86,7 +86,7 @@ function Test-ReleaseBearingPath {
     }
     if ($Path -clike '.github/workflows/*') {
         return $Path -cnotin @(
-            '.github/workflows/test.yml', '.github/workflows/install-tools.yml',
+            '.github/workflows/test.yml', '.github/workflows/test-macos.yml', '.github/workflows/install-tools.yml',
             '.github/workflows/release.yml'
         )
     }

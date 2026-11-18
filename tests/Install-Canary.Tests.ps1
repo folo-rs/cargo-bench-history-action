@@ -101,6 +101,40 @@ Describe 'Shared real installation gate orchestration' {
         { Invoke-InstallationCanary -Method binstall -RustTarget test-target -Root $TestDrive -ManifestPath manifest } | Should -Throw
         Should -Invoke Invoke-BackfillPreparationCanary -Times 1 -Exactly
     }
+
+    It 'verifies every promised platform archive without executing a platform tool' {
+        $script:manifest.targets += @{ rust_target = 'aarch64-apple-darwin' }
+        Invoke-ArchiveCanary -Root $TestDrive -ManifestPath manifest
+        Should -Invoke Invoke-WebRequest -Times 12 -Exactly
+        Should -Invoke Invoke-WebRequest -Times 6 -Exactly -ParameterFilter {
+            $Uri -clike '*-aarch64-apple-darwin.*'
+        }
+        Should -Invoke Assert-CanaryChecksum -Times 6 -Exactly
+        Should -Invoke Invoke-CanaryExecutable -Times 0
+        Should -Invoke Install-ActionTools -Times 0
+    }
+
+    It 'fails required archive availability when the advisory platform archive is missing or corrupt' -ForEach @('missing', 'corrupt') {
+        $script:manifest.targets += @{ rust_target = 'aarch64-apple-darwin' }
+        if ($_ -ceq 'missing') {
+            Mock Invoke-WebRequest { throw 'macOS asset absent' } -ParameterFilter {
+                $Uri -clike '*-aarch64-apple-darwin.zip'
+            }
+        } else {
+            Mock Assert-CanaryChecksum { throw 'macOS checksum mismatch' } -ParameterFilter {
+                $FileName -clike '*-aarch64-apple-darwin.zip'
+            }
+        }
+        { Invoke-ArchiveCanary -Root $TestDrive -ManifestPath manifest } | Should -Throw '*macOS*'
+        Should -Invoke Invoke-CanaryExecutable -Times 0
+        Should -Invoke Install-ActionTools -Times 0
+    }
+
+    It 'requires a fresh archive probe rather than an existing downloaded root' {
+        Mock Test-Path { $true }
+        { Invoke-ArchiveCanary -Root $TestDrive -ManifestPath manifest } | Should -Throw '*absent*'
+        Should -Invoke Invoke-WebRequest -Times 0
+    }
 }
 
 Describe 'Official archive evidence' {

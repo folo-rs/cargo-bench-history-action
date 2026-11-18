@@ -5,6 +5,12 @@ on:
   push: {}
   workflow_dispatch: {}
   merge_group: {}
+  workflow_call:
+    inputs:
+      macos-advisory:
+        description: Run only macOS canaries in the separate advisory workflow
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,11 +27,16 @@ jobs:
           persist-credentials: false
       - id: manifest
         shell: pwsh
+        env:
+          MACOS_ADVISORY: ${{ inputs.macos-advisory || false }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module .\scripts\Tools.psm1
           $manifest = Read-ActionManifest -Path .\release.json
-          "matrix=$(@{ include = @($manifest.targets) } | ConvertTo-Json -Compress -Depth 5)" >> $env:GITHUB_OUTPUT
+          $macos = $env:MACOS_ADVISORY -ceq 'true'
+          $targets = @($manifest.targets | Where-Object { ($_.os -ceq 'macOS') -eq $macos })
+          if ($targets.Count -eq 0) { throw 'No manifest targets selected for this CI workflow.' }
+          "matrix=$(@{ include = $targets } | ConvertTo-Json -Compress -Depth 5)" >> $env:GITHUB_OUTPUT
           $source = (Get-Content .\.github\monorepo-revision -Raw).Trim()
           if ($source -cnotmatch '^[0-9a-f]{40}$') { throw 'Source canaries require an exact monorepo commit.' }
           "source=$source" >> $env:GITHUB_OUTPUT
@@ -56,6 +67,7 @@ jobs:
           if ($result.Result -ne 'Passed') { throw 'Pester failed.' }
 
   version-readiness:
+    if: ${{ !inputs.macos-advisory }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -197,6 +209,7 @@ jobs:
   path-smoke:
     name: Source path (${{ matrix.runner }})
     needs: [setup, path-collect]
+    if: always() && needs.setup.result == 'success'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -207,6 +220,14 @@ jobs:
     env:
       CBH_ACTION_DISABLE_CACHE: true
     steps:
+      - name: Require successful source collection
+        shell: pwsh
+        env:
+          COLLECTION_RESULT: ${{ needs.path-collect.result }}
+        run: |
+          if ($env:COLLECTION_RESULT -cne 'success') {
+            throw "Source collection did not pass: $env:COLLECTION_RESULT"
+          }
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -389,6 +410,8 @@ jobs:
 
   availability:
     uses: ./.github/workflows/install-tools.yml
+    with:
+      macos-advisory: ${{ inputs.macos-advisory || false }}
 
   install-tools:
     name: install-tools
@@ -396,7 +419,7 @@ jobs:
     needs: availability
     runs-on: ubuntu-latest
     steps:
-      - name: Require every real installation canary
+      - name: Require the selected native canaries and published archives
         shell: pwsh
         env:
           AVAILABILITY_RESULT: ${{ needs.availability.result }}
