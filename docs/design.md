@@ -289,11 +289,16 @@ The required `install-tools` check installs the exact registry packages and thei
 promised prebuilt archives for every supported target. Neither `path`, a cache hit
 nor source fallback establishes availability. It runs on PRs and merge candidates.
 
-Hosted `macos-latest` runner acquisition is the sole availability exception. A
-cancelled job with no executed steps and GitHub's exact runner-acquisition failure
-annotation may be non-blocking; its missing evidence is disclosed, never called a
-passing installation. Real macOS test/install failures, unavailable packages or
-archives, unknown cancellations and every non-macOS failure remain blocking.
+Hosted `macos-latest` runner acquisition is the sole availability exception. The
+verifier reads authenticated GitHub check-run annotations and requires the exact
+failure message `The job was not acquired by Runner of type hosted even after multiple attempts`
+on a completed, cancelled job with zero steps and no assigned runner.
+Queued/cancelled status or a capacity notice alone is not proof.
+See [how capacity failures are detected](implementation.md#detecting-hosted-macos-runner-capacity-failures)
+for the endpoint, identity checks and annotation-handling boundaries.
+Missing evidence is disclosed, never called a passing installation.
+Real macOS test/install failures, unavailable packages or archives,
+unproven cancellations and every non-macOS failure remain blocking.
 The same narrow exception applies to this repository's source and Pester canaries,
 not to consumer benchmark execution or report semantics.
 
