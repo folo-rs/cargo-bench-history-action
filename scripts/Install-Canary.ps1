@@ -6,6 +6,7 @@ Dot-sourcing exposes the verification helpers to mocked Pester tests without I/O
 #>
 [CmdletBinding()]
 param(
+    [switch] $ArchivesOnly,
     [ValidateSet('install', 'binstall')] [string] $Method,
     [string] $RustTarget,
     [string] $Root,
@@ -47,6 +48,31 @@ function Invoke-BackfillPreparationCanary {
     & (Join-Path $PSScriptRoot '..\tests\Assert-BackfillPreparation.ps1') -Companion $Companion -Root $Root
 }
 
+function Assert-CanaryArchives {
+    param($Manifest, [string[]] $RustTargets, [string] $Root)
+    if (-not $Root -or (Test-Path -LiteralPath $Root)) { throw 'Archive checks require an absent, explicit root.' }
+    $null = New-Item -ItemType Directory -Path $Root
+    foreach ($target in $RustTargets) {
+        foreach ($tool in $Manifest.tools) {
+            $asset = Get-CanaryAsset $tool $target
+            $archive = Join-Path $Root $asset.Name
+            Write-Information "Checking promised $($tool.name) $($tool.version) archive for $target at $($asset.Url)." -InformationAction Continue
+            Invoke-WebRequest -Uri $asset.Url -OutFile $archive
+            $sidecar = (Invoke-WebRequest -Uri $asset.ChecksumUrl).Content
+            # Some HTTP content types produce bytes rather than text.
+            if ($sidecar -is [byte[]]) { $sidecar = [Text.Encoding]::UTF8.GetString($sidecar) }
+            Assert-CanaryChecksum -Sidecar $sidecar -FileName $asset.Name -Hash (Get-FileHash $archive -Algorithm SHA256).Hash
+        }
+    }
+}
+
+function Invoke-ArchiveCanary {
+    param([string] $Root, [string] $ManifestPath)
+    Import-Module (Join-Path $PSScriptRoot 'Tools.psm1') -Force
+    $manifest = Read-ActionManifest -Path $ManifestPath
+    Assert-CanaryArchives -Manifest $manifest -RustTargets $manifest.targets.rust_target -Root $Root
+}
+
 function Invoke-InstallationCanary {
     param([string] $Method, [string] $RustTarget, [string] $Root, [string] $ManifestPath)
     Import-Module (Join-Path $PSScriptRoot 'Tools.psm1') -Force
@@ -61,18 +87,7 @@ function Invoke-InstallationCanary {
     $null = New-Item -ItemType Directory -Path $Root
     $installRoot = Join-Path $Root 'installed'
     $archiveRoot = Join-Path $Root 'archives'
-    $null = New-Item -ItemType Directory -Path $archiveRoot
-
-    foreach ($tool in $manifest.tools) {
-        $asset = Get-CanaryAsset $tool $RustTarget
-        $archive = Join-Path $archiveRoot $asset.Name
-        Write-Information "Checking promised $($tool.name) $($tool.version) archive for $RustTarget at $($asset.Url)." -InformationAction Continue
-        Invoke-WebRequest -Uri $asset.Url -OutFile $archive
-        $sidecar = (Invoke-WebRequest -Uri $asset.ChecksumUrl).Content
-        # Some HTTP content types produce bytes rather than text.
-        if ($sidecar -is [byte[]]) { $sidecar = [Text.Encoding]::UTF8.GetString($sidecar) }
-        Assert-CanaryChecksum -Sidecar $sidecar -FileName $asset.Name -Hash (Get-FileHash $archive -Algorithm SHA256).Hash
-    }
+    Assert-CanaryArchives -Manifest $manifest -RustTargets $RustTarget -Root $archiveRoot
 
     $parameters = @{
         Manifest = $manifest
@@ -116,5 +131,10 @@ function Invoke-InstallationCanary {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    Invoke-InstallationCanary -Method $Method -RustTarget $RustTarget -Root $Root -ManifestPath $ManifestPath
+    if ($ArchivesOnly) {
+        if ($Method -or $RustTarget) { throw 'Archive-only checks do not select a native installation method or target.' }
+        Invoke-ArchiveCanary -Root $Root -ManifestPath $ManifestPath
+    } else {
+        Invoke-InstallationCanary -Method $Method -RustTarget $RustTarget -Root $Root -ManifestPath $ManifestPath
+    }
 }

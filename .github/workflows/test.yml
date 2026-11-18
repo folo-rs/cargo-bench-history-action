@@ -5,6 +5,12 @@ on:
   push: {}
   workflow_dispatch: {}
   merge_group: {}
+  workflow_call:
+    inputs:
+      macos-advisory:
+        description: Run only macOS canaries in the separate advisory workflow
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,11 +27,16 @@ jobs:
           persist-credentials: false
       - id: manifest
         shell: pwsh
+        env:
+          MACOS_ADVISORY: ${{ inputs.macos-advisory || false }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module .\scripts\Tools.psm1
           $manifest = Read-ActionManifest -Path .\release.json
-          "matrix=$(@{ include = @($manifest.targets) } | ConvertTo-Json -Compress -Depth 5)" >> $env:GITHUB_OUTPUT
+          $macos = $env:MACOS_ADVISORY -ceq 'true'
+          $targets = @($manifest.targets | Where-Object { ($_.os -ceq 'macOS') -eq $macos })
+          if ($targets.Count -eq 0) { throw 'No manifest targets selected for this CI workflow.' }
+          "matrix=$(@{ include = $targets } | ConvertTo-Json -Compress -Depth 5)" >> $env:GITHUB_OUTPUT
           $source = (Get-Content .\.github\monorepo-revision -Raw).Trim()
           if ($source -cnotmatch '^[0-9a-f]{40}$') { throw 'Source canaries require an exact monorepo commit.' }
           "source=$source" >> $env:GITHUB_OUTPUT
@@ -56,6 +67,7 @@ jobs:
           if ($result.Result -ne 'Passed') { throw 'Pester failed.' }
 
   version-readiness:
+    if: ${{ !inputs.macos-advisory }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -202,27 +214,24 @@ jobs:
     permissions:
       contents: read
       actions: read
-      checks: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     env:
       CBH_ACTION_DISABLE_CACHE: true
     steps:
+      - name: Require successful source collection
+        shell: pwsh
+        env:
+          COLLECTION_RESULT: ${{ needs.path-collect.result }}
+        run: |
+          if ($env:COLLECTION_RESULT -cne 'success') {
+            throw "Source collection did not pass: $env:COLLECTION_RESULT"
+          }
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Verify this platform's collection prerequisite
-        id: collection-status
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CAPACITY_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          CANARY_RUNNER: ${{ matrix.runner }}
-        run: |
-          & .\scripts\Assert-RunnerCapacity.ps1 -Scope collection -Runner $env:CANARY_RUNNER
       - name: Checkout exact canary source
-        if: steps.collection-status.outputs.unavailable == 'false'
         uses: actions/checkout@v7
         with:
           repository: folo-rs/folo
@@ -231,11 +240,9 @@ jobs:
           persist-credentials: false
       # Match the collection compiler channel and reviewed bootstrap implementation.
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
-        if: steps.collection-status.outputs.unavailable == 'false'
         with:
           toolchain: stable
       - name: Download the selected platform's portable fixture
-        if: steps.collection-status.outputs.unavailable == 'false'
         uses: actions/download-artifact@v8
         with:
           name: canary-source-fixture-${{ matrix.rust_target }}
@@ -244,7 +251,6 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
       - name: Restore the measured checkout and baseline store
-        if: steps.collection-status.outputs.unavailable == 'false'
         id: fixture
         shell: pwsh
         run: |
@@ -274,7 +280,7 @@ jobs:
             "skipped-collections=$skippedCollections" >> $env:GITHUB_OUTPUT
           }
       - name: Download every collection attempt for this platform
-        if: steps.collection-status.outputs.unavailable == 'false' && steps.fixture.outputs.skipped != 'true'
+        if: steps.fixture.outputs.skipped != 'true'
         uses: actions/download-artifact@v8
         with:
           pattern: canary-source-receipt-${{ matrix.rust_target }}-*
@@ -284,7 +290,7 @@ jobs:
           run-id: ${{ github.run_id }}
       - name: Reconcile actual completed collection jobs
         id: collection
-        if: steps.collection-status.outputs.unavailable == 'false' && steps.fixture.outputs.skipped != 'true'
+        if: steps.fixture.outputs.skipped != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -311,7 +317,6 @@ jobs:
           Invoke-WorkflowOperation reconcile $context -Instance $env:CANARY_INSTANCE `
             -Head $env:CANARY_HEAD -Platforms $env:CANARY_PLATFORM
       - name: Analyze with source-built tools
-        if: steps.collection-status.outputs.unavailable == 'false'
         id: analyze
         uses: ./
         with:
@@ -329,7 +334,6 @@ jobs:
           # reconciliation or an explicit fork policy skip.
           completed-platforms: ${{ matrix.runner }}
       - name: Verify real collection and honest reports
-        if: steps.collection-status.outputs.unavailable == 'false'
         shell: pwsh
         env:
           CANARY_WORKSPACE: ${{ steps.fixture.outputs.workspace }}
@@ -341,7 +345,7 @@ jobs:
           & .\tests\Assert-Canary.ps1 -Workspace $env:CANARY_WORKSPACE -Store $env:CANARY_STORE `
             -MachineKey $env:CANARY_KEY -CollectionJson $env:CANARY_COLLECTION -AnalysisJson $env:CANARY_ANALYSIS
       - name: Verify offline Actions result cards
-        if: steps.collection-status.outputs.unavailable == 'false' && steps.analyze.outputs.skipped != 'true'
+        if: steps.analyze.outputs.skipped != 'true'
         shell: pwsh
         env:
           CANARY_COMPANION: ${{ steps.collection.outputs.companion }}
@@ -353,7 +357,7 @@ jobs:
             -Directory (Join-Path $env:RUNNER_TEMP 'result-canary') -AnalysisJson $env:CANARY_ANALYSIS `
             -AnalyzedSha $env:CANARY_HEAD -Platform $env:CANARY_PLATFORM
       - name: Verify authenticated backfill discovery and unavailable evidence
-        if: steps.collection-status.outputs.unavailable == 'false' && steps.analyze.outputs.skipped != 'true'
+        if: steps.analyze.outputs.skipped != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -406,44 +410,20 @@ jobs:
 
   availability:
     uses: ./.github/workflows/install-tools.yml
+    with:
+      macos-advisory: ${{ inputs.macos-advisory || false }}
 
   install-tools:
     name: install-tools
     if: always()
     needs: availability
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-      checks: read
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Require every real installation canary
+      - name: Require the selected native canaries and published archives
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-          CAPACITY_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          AVAILABILITY_RESULT: ${{ needs.availability.result }}
         run: |
-          & .\scripts\Assert-RunnerCapacity.ps1 -Scope installation
-
-  macos-capacity:
-    if: always()
-    needs: [setup, pester, path-collect, path-smoke]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-      checks: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Require tests and source canaries except proven macOS acquisition failures
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CAPACITY_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          & .\scripts\Assert-RunnerCapacity.ps1 -Scope validation
+          if ($env:AVAILABILITY_RESULT -cne 'success') {
+            throw "Published tool availability did not pass: $env:AVAILABILITY_RESULT"
+          }

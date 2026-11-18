@@ -10,3 +10,6 @@
 - Do not publish tags/releases or merge pull requests while developing or testing.
 - Preserve immutable version tags and prevent older release runs from moving a major tag back.
 - Keep `.github/monorepo-revision` pinned to the source commit used by path-mode canaries.
+- Keep macOS advisory CI green and investigate observed regressions. Hosted macOS
+  runner capacity is unreliable: merges need not wait for queued/unrun macOS checks.
+  Linux/Windows validation and all promised platform archives remain required.

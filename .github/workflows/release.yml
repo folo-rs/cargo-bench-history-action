@@ -17,21 +17,15 @@ jobs:
     needs: availability
     if: always() && github.repository == 'folo-rs/cargo-bench-history-action' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-      checks: read
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Require every real installation canary except proven macOS acquisition failures
+      - name: Require Linux and Windows installations and all promised archives
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-          CAPACITY_HEAD: ${{ github.sha }}
+          AVAILABILITY_RESULT: ${{ needs.availability.result }}
         run: |
-          & .\scripts\Assert-RunnerCapacity.ps1 -Scope installation
+          if ($env:AVAILABILITY_RESULT -cne 'success') {
+            throw "Published tool availability did not pass: $env:AVAILABILITY_RESULT"
+          }
 
   publish:
     needs: install-tools
@@ -40,7 +34,7 @@ jobs:
     permissions:
       contents: write
     # Only the mutation job is serialized; an old queued run re-reads current refs.
-    # The checked gate, not a cancelled matrix's raw result, authorizes this job.
+    # Required availability does not depend on advisory macOS native canaries.
     concurrency:
       group: action-release-publication
       cancel-in-progress: false

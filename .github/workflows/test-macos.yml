@@ -1,0 +1,19 @@
+name: macOS advisory validation
+
+on:
+  pull_request: {}
+  push: {}
+  workflow_dispatch: {}
+  merge_group: {}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  macos:
+    # Hosted macOS capacity is unreliable; no required job waits for this call.
+    # Keep outcomes visible and fix regressions; see docs/implementation.md.
+    uses: ./.github/workflows/test.yml
+    with:
+      macos-advisory: true

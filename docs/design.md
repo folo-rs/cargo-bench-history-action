@@ -285,22 +285,21 @@ an independent execution-only fallback, not an alternative publisher.
 
 ## Releases
 
-The required `install-tools` check installs the exact registry packages and their
-promised prebuilt archives for every supported target. Neither `path`, a cache hit
-nor source fallback establishes availability. It runs on PRs and merge candidates.
+The required `install-tools` check installs exact registry packages and prebuilt
+binaries on Linux and Windows. It also downloads and verifies promised archives
+and checksums for **every** supported target, including macOS, without needing
+a macOS runner. Neither `path`, a cache hit nor source fallback establishes
+published-binary availability. It runs on PRs and merge candidates.
 
-Hosted `macos-latest` runner acquisition is the sole availability exception. The
-verifier reads authenticated GitHub check-run annotations and requires the exact
-failure message `The job was not acquired by Runner of type hosted even after multiple attempts`
-on a completed, cancelled job with zero steps and no assigned runner.
-Queued/cancelled status or a capacity notice alone is not proof.
-See [how capacity failures are detected](implementation.md#detecting-hosted-macos-runner-capacity-failures)
-for the endpoint, identity checks and annotation-handling boundaries.
-Missing evidence is disclosed, never called a passing installation.
-Real macOS test/install failures, unavailable packages or archives,
-unproven cancellations and every non-macOS failure remain blocking.
-The same narrow exception applies to this repository's source and Pester canaries,
-not to consumer benchmark execution or report semantics.
+macOS native validation is always advisory because hosted macOS runner capacity
+is unreliable. It runs in a separate workflow: required checks and release
+publication do not wait for it, even while macOS jobs sit queued. Agents must
+keep advisory checks green and investigate/fix observed regressions, but unrun
+checks need not delay merging. Outcomes stay visible without being rewritten as
+success. There is no capacity-detection exception or annotation parser.
+Linux/Windows checks and all promised archive/checksum checks remain blocking.
+See [advisory macOS CI](implementation.md#advisory-macos-ci).
+Consumer benchmark, history/backfill and report semantics are unchanged.
 
 Merge to `main` triggers the same availability gate before release publication.
 Version tags are immutable. Retries reconcile partial publication; a later commit
