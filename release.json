@@ -5,13 +5,13 @@
     {
       "name": "cargo-bench-history",
       "binary": "cargo-bench-history",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "role": "tool"
     },
     {
       "name": "cargo-bench-history-github",
       "binary": "cargo-bench-history-github",
-      "version": "0.2.44",
+      "version": "0.2.45",
       "role": "companion"
     },
     {
