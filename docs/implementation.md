@@ -169,8 +169,14 @@ names before transfer. The pinned official download action first extracts into a
 isolated directory; the adapter captures transfer failure and validates the
 complete frozen set. A failed or incomplete transfer then probes the archive
 redirects with the workflow token, within the same bounded retry budget and
-per-request timeout used for metadata. A confirmed redirect permits one retry
-with that token into a second isolated directory. Persistent single-ID REST
+per-request timeout used for metadata. At least one transient archive status must precede the redirect to classify an
+official-action failure as visibility related. A completeness failure may use
+an already-ready redirect because the official action reported success while
+omitting a selected artifact. A redirect that was ready on the first probe
+leaves other transfer failures visible instead of repeating a possible
+extraction failure.
+A classified failure permits one retry with that token into a second isolated
+directory. Persistent single-ID REST
 404s permit one same-run-service fallback; incomplete multi-ID transfers remain
 errors. Only a verified transfer is moved atomically into the destination while
 retaining unrelated existing evidence.

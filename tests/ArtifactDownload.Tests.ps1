@@ -356,6 +356,29 @@ InModuleScope ArtifactVisibility {
             Should -Invoke Start-Sleep -Times 1 -Exactly
         }
 
+        It 'does not retry a transfer when the archive was already ready' {
+            Mock Get-ArtifactArchiveStatus { 302 }
+
+            {
+                Wait-ArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+                    -Repository 'owner/repository' -GitHubToken 'job-token' -ArtifactIds 41
+            } | Should -Throw '*not a classified artifact-visibility error*'
+
+            Should -Invoke Get-ArtifactArchiveStatus -Times 1 -Exactly
+            Should -Invoke Start-Sleep -Times 0
+        }
+
+        It 'retries a known incomplete transfer when every archive is ready' {
+            Mock Get-ArtifactArchiveStatus { 302 }
+
+            Wait-ArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+                -Repository 'owner/repository' -GitHubToken 'job-token' `
+                -ArtifactIds 41,42 -AllowReadyRedirect | Should -BeTrue
+
+            Should -Invoke Get-ArtifactArchiveStatus -Times 2 -Exactly
+            Should -Invoke Start-Sleep -Times 0
+        }
+
         It 'propagates a permanent archive status without retry' -ForEach @(
             @{ StatusCode = 401 }
             @{ StatusCode = 403 }

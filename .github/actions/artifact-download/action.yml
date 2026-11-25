@@ -128,13 +128,17 @@ runs:
         CBH_ARTIFACT_IDS: ${{ steps.selected.outputs.ids }}
         CBH_API_URL: ${{ inputs.api-url }}
         CBH_REPOSITORY: ${{ inputs.repository }}
+        CBH_ALLOW_READY_REDIRECT: ${{ steps.transfer.outcome == 'success' && steps.complete.outcome == 'failure' }}
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
         Write-Warning 'Artifact transfer failed. Checking archive access with the workflow token before retrying.'
         Import-Module (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'ArtifactVisibility.psm1') -Force
+        $allowReadyRedirect = if ($env:CBH_ALLOW_READY_REDIRECT -ceq 'true') { $true }
+        elseif ($env:CBH_ALLOW_READY_REDIRECT -ceq 'false') { $false }
+        else { throw 'archive readiness classification must be true or false.' }
         $useRest = Wait-ArtifactArchiveRedirect -ApiUrl $env:CBH_API_URL `
           -Repository $env:CBH_REPOSITORY -ArtifactIds ($env:CBH_ARTIFACT_IDS -split ',') `
-          -GitHubToken $env:GH_TOKEN
+          -GitHubToken $env:GH_TOKEN -AllowReadyRedirect:$allowReadyRedirect
         "rest=$useRest" >> $env:GITHUB_OUTPUT
     - name: Retry archive transfer
       id: retry

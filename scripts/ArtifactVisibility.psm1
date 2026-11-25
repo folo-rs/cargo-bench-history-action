@@ -489,10 +489,12 @@ function Wait-ArtifactArchiveRedirect {
         [Parameter(Mandatory)] [string] $ApiUrl,
         [Parameter(Mandatory)] [string] $Repository,
         [Parameter(Mandatory)] [long[]] $ArtifactIds,
-        [Parameter(Mandatory)] [string] $GitHubToken
+        [Parameter(Mandatory)] [string] $GitHubToken,
+        [switch] $AllowReadyRedirect
     )
 
     $headers = Get-ArtifactHeaders -GitHubToken $GitHubToken
+    $observedTransient = $false
     foreach ($id in $ArtifactIds) {
         $uri = "$($ApiUrl.TrimEnd('/'))/repos/$Repository/actions/artifacts/$id/zip"
         for ($attempt = 1; $attempt -le $script:DefaultMaximumAttempts; $attempt++) {
@@ -509,9 +511,14 @@ function Wait-ArtifactArchiveRedirect {
                 $attempt -eq $script:DefaultMaximumAttempts) {
                 throw "$detail Check this job's artifact access; a 404 does not distinguish delay from denial."
             }
+            $observedTransient = $true
             Write-Warning "$detail Retrying in $script:DefaultRetryDelaySeconds seconds."
             Start-Sleep -Seconds $script:DefaultRetryDelaySeconds
         }
+    }
+    if (-not $observedTransient -and -not $AllowReadyRedirect) {
+        throw 'The selected archive redirects were ready when the transfer failed; ' +
+            'the failure is not a classified artifact-visibility error.'
     }
     return $true
 }
