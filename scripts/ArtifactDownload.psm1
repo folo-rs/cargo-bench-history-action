@@ -121,6 +121,94 @@ function Get-GitHubRunJobs {
     }
 }
 
+# Returns the final local job component because reusable workflows prefix it with
+# caller and nested workflow names that do not participate in the marker identity.
+function Get-ArtifactJobMarker {
+    param([Parameter(Mandatory)] $Job)
+
+    $name = [string] (Get-ArtifactResponseProperty -Response $Job -Name 'name')
+    $separator = $name.LastIndexOf(' / ', [StringComparison]::Ordinal)
+    if ($separator -lt 0) { return $name }
+    return $name.Substring($separator + 3)
+}
+
+# Reads the timestamp boundary needed to distinguish an executed retry from a
+# successful job copied into a later workflow attempt by GitHub.
+function Get-GitHubRunAttemptStart {
+    param(
+        [Parameter(Mandatory)] [string] $ApiUrl,
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [long] $RunId,
+        [Parameter(Mandatory)] [long] $Attempt,
+        [Parameter(Mandatory)] [hashtable] $Headers
+    )
+
+    $uri = "$($ApiUrl.TrimEnd('/'))/repos/$Repository/actions/runs/$RunId/attempts/$Attempt"
+    $response = Invoke-RestMethod -Uri $uri -Headers $Headers -ErrorAction Stop
+    $responseId = [long] (Get-ArtifactResponseProperty -Response $response -Name 'id')
+    $responseAttempt = [long] (Get-ArtifactResponseProperty -Response $response -Name 'run_attempt')
+    if ($responseId -ne $RunId -or $responseAttempt -ne $Attempt) {
+        throw "GitHub returned attempt identity $responseId/$responseAttempt while resolving $RunId/$Attempt."
+    }
+    return [DateTimeOffset]::Parse(
+        [string] (Get-ArtifactResponseProperty -Response $response -Name 'run_started_at'),
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind
+    )
+}
+
+# Selects only genuine successful execution snapshots. GitHub reports reused
+# successful jobs with a later run_attempt but their original execution interval;
+# those copies must not imply a second immutable artifact.
+function Test-GitHubJobWasExecuted {
+    param(
+        [Parameter(Mandatory)] $Job,
+        [Parameter(Mandatory)] [hashtable] $Executions,
+        [Parameter(Mandatory)] [hashtable] $AttemptStarts,
+        [Parameter(Mandatory)] [string] $ApiUrl,
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [long] $RunId,
+        [Parameter(Mandatory)] [hashtable] $Headers
+    )
+
+    $attempt = [long] (Get-ArtifactResponseProperty -Response $Job -Name 'run_attempt')
+    $marker = Get-ArtifactJobMarker -Job $Job
+    $startedText = [string] (Get-ArtifactResponseProperty -Response $Job -Name 'started_at')
+    $completedText = [string] (Get-ArtifactResponseProperty -Response $Job -Name 'completed_at')
+    $started = [DateTimeOffset]::Parse(
+        $startedText,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind
+    )
+    $completed = [DateTimeOffset]::Parse(
+        $completedText,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind
+    )
+    if ($completed -lt $started) {
+        throw "Successful job '$marker' completed before it started."
+    }
+    $execution = ConvertTo-Json -InputObject @($marker, $startedText, $completedText) -Compress
+    if ($attempt -gt 1) {
+        if (-not $AttemptStarts.ContainsKey($attempt)) {
+            $AttemptStarts[$attempt] = Get-GitHubRunAttemptStart -ApiUrl $ApiUrl -Repository $Repository `
+                -RunId $RunId -Attempt $attempt -Headers $Headers
+        }
+        $boundary = $AttemptStarts[$attempt]
+        if ($completed -lt $boundary) {
+            if (-not $Executions.ContainsKey($execution)) {
+                throw "Reused successful job '$marker' in attempt $attempt has no earlier execution evidence."
+            }
+            return $false
+        }
+        if ($started -lt $boundary) {
+            throw "Successful job '$marker' started before workflow attempt $attempt began but completed after it."
+        }
+    }
+    $Executions[$execution] = $true
+    return $true
+}
+
 # Resolves exact artifact names from successful producer jobs across run
 # attempts. This keeps retry completeness tied to authenticated job evidence,
 # while artifact naming remains explicit workflow data rather than a benchmark decision.
@@ -136,9 +224,14 @@ function Get-ExpectedArtifactNames {
         [bool] $IncludeJobSuffix
     )
 
+    $jobs = @(Get-GitHubRunJobs -ApiUrl $ApiUrl -Repository $Repository -RunId $RunId -Headers $Headers)
+    $executions = @{}
+    $attemptStarts = @{}
     $names = @(
-        foreach ($job in @(Get-GitHubRunJobs -ApiUrl $ApiUrl -Repository $Repository -RunId $RunId -Headers $Headers)) {
-            $jobName = [string] (Get-ArtifactResponseProperty -Response $job -Name 'name')
+        foreach ($job in ($jobs | Sort-Object {
+                    [long] (Get-ArtifactResponseProperty -Response $_ -Name 'run_attempt')
+                })) {
+            $jobName = Get-ArtifactJobMarker -Job $job
             if (-not $jobName.StartsWith($JobPrefix, [StringComparison]::Ordinal)) { continue }
             $successfulStep = @(
                 Get-ArtifactResponseProperty -Response $job -Name 'steps' | Where-Object {
@@ -147,6 +240,10 @@ function Get-ExpectedArtifactNames {
                 }
             )
             if ($successfulStep.Count -eq 0) { continue }
+            if (-not (Test-GitHubJobWasExecuted -Job $job -Executions $executions -AttemptStarts $attemptStarts `
+                        -ApiUrl $ApiUrl -Repository $Repository -RunId $RunId -Headers $Headers)) {
+                continue
+            }
             $attempt = [long] (Get-ArtifactResponseProperty -Response $job -Name 'run_attempt')
             if ($IncludeJobSuffix) {
                 $suffix = $jobName.Substring($JobPrefix.Length)

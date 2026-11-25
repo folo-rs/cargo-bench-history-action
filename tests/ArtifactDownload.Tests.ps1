@@ -142,6 +142,8 @@ InModuleScope ArtifactDownload {
                         [pscustomobject]@{
                             name = 'cbh-collect:project:windows-latest'
                             run_attempt = 1
+                            started_at = '2026-01-01T00:00:00Z'
+                            completed_at = '2026-01-01T00:01:00Z'
                             steps = @([pscustomobject]@{
                                     name = 'Upload receipt'
                                     conclusion = 'success'
@@ -150,6 +152,8 @@ InModuleScope ArtifactDownload {
                         [pscustomobject]@{
                             name = 'cbh-collect:project:ubuntu-latest'
                             run_attempt = 1
+                            started_at = '2026-01-01T00:00:00Z'
+                            completed_at = '2026-01-01T00:01:00Z'
                             steps = @([pscustomobject]@{
                                     name = 'Upload receipt'
                                     conclusion = 'success'
@@ -177,6 +181,66 @@ InModuleScope ArtifactDownload {
             Should -Invoke Start-Sleep -Times 1 -Exactly
             Should -Invoke Save-GitHubArtifactArchive -Times 2 -Exactly
             Should -Invoke Expand-Archive -Times 2 -Exactly
+        }
+
+        It 'normalizes reusable-workflow job prefixes when deriving expected names' {
+            Mock Get-GitHubRunJobs {
+                @([pscustomobject]@{
+                        name = 'benchmark / cbh-collect:project:ubuntu-latest'
+                        run_attempt = 1
+                        started_at = '2026-01-01T00:00:00Z'
+                        completed_at = '2026-01-01T00:01:00Z'
+                        steps = @([pscustomobject]@{ name = 'Upload receipt'; conclusion = 'success' })
+                    })
+            }
+
+            @(Get-ExpectedArtifactNames -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
+                    -RunId 7 -JobPrefix 'cbh-collect:project:' -StepName 'Upload receipt' `
+                    -ArtifactNamePrefix 'collection-' -Headers @{} -IncludeJobSuffix $true) |
+                Should -Be @('collection-ubuntu-latest-1')
+        }
+
+        It 'omits a successful job copy reused by a partial rerun' {
+            Mock Get-GitHubRunJobs {
+                @(
+                    [pscustomobject]@{
+                        name = 'benchmark / cbh-collect:project:ubuntu-latest'
+                        run_attempt = 1
+                        started_at = '2026-01-01T00:00:10Z'
+                        completed_at = '2026-01-01T00:01:00Z'
+                        steps = @([pscustomobject]@{ name = 'Upload receipt'; conclusion = 'success' })
+                    }
+                    [pscustomobject]@{
+                        name = 'benchmark / cbh-collect:project:ubuntu-latest'
+                        run_attempt = 2
+                        started_at = '2026-01-01T00:00:10Z'
+                        completed_at = '2026-01-01T00:01:00Z'
+                        steps = @([pscustomobject]@{ name = 'Upload receipt'; conclusion = 'success' })
+                    }
+                    [pscustomobject]@{
+                        name = 'benchmark / cbh-collect:project:windows-latest'
+                        run_attempt = 2
+                        started_at = '2026-01-01T00:02:10Z'
+                        completed_at = '2026-01-01T00:03:00Z'
+                        steps = @([pscustomobject]@{ name = 'Upload receipt'; conclusion = 'success' })
+                    }
+                    [pscustomobject]@{
+                        name = 'benchmark / cbh-collect:project:ubuntu-latest'
+                        run_attempt = 3
+                        started_at = '2026-01-01T00:00:10Z'
+                        completed_at = '2026-01-01T00:01:00Z'
+                        steps = @([pscustomobject]@{ name = 'Upload receipt'; conclusion = 'success' })
+                    }
+                )
+            }
+            Mock Get-GitHubRunAttemptStart {
+                [DateTimeOffset]::Parse('2026-01-01T00:02:00Z').AddMinutes($Attempt - 2)
+            }
+
+            @(Get-ExpectedArtifactNames -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
+                    -RunId 7 -JobPrefix 'cbh-collect:project:' -StepName 'Upload receipt' `
+                    -ArtifactNamePrefix 'collection-' -Headers @{} -IncludeJobSuffix $true) |
+                Should -Be @('collection-ubuntu-latest-1', 'collection-windows-latest-2')
         }
 
         It 'retries metadata absence and stops once the selector becomes visible' {

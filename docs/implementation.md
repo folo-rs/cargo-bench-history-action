@@ -168,8 +168,11 @@ authenticated GitHub REST artifact inventory. ID-, exact-name and wildcard-patte
 selectors share a bounded retry budget for temporarily missing metadata and archive
 URLs. The retry also covers a listed artifact whose archive endpoint is not yet
 downloadable. Pattern consumers derive the exact expected immutable names from
-completed producer-job upload steps across run attempts, so a partial inventory
-remains incomplete until every expected receipt is visible. The retry does not cover
+completed producer-job upload steps across run attempts. Reusable-workflow names
+normalize to their final job component. Copies of untouched successful jobs in later
+rerun attempts retain the original execution attempt and cannot require a second
+artifact. A partial inventory remains incomplete until every expected receipt is
+visible. The retry does not cover
 authentication, authorization, service, validation, extraction or expired-artifact
 errors. The final missing-artifact error identifies the run after exhausting the
 budget. Internal workflows use this action before analysis or result reconciliation,
