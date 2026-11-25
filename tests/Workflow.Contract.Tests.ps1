@@ -621,6 +621,19 @@ Describe 'Actions result graph for <flow>' -ForEach @(
 }
 
 Describe 'Same-run artifact download audit' {
+    It 'gates inventory visibility before delegating the official selector and layout' {
+        $steps = $artifactAction.runs.steps
+        $steps.Count | Should -Be 2
+        $steps[0].shell | Should -BeExactly 'pwsh'
+        $steps[0].run | Should -Match 'Wait-ArtifactVisibility'
+        $steps[1].uses | Should -BeExactly 'actions/download-artifact@v8'
+        foreach ($input in @('artifact-ids', 'name', 'pattern', 'path', 'merge-multiple',
+                'github-token', 'repository', 'run-id')) {
+            $expected = '${{ inputs.' + $input + ' }}'
+            $steps[1].with[$input] | Should -BeExactly $expected
+        }
+    }
+
     It 'routes every workflow and composite download through the bounded private action' {
         $documents = @(
             Get-ChildItem (Join-Path $root '.github\workflows') -File -Filter '*.yml'
@@ -635,6 +648,10 @@ Describe 'Same-run artifact download audit' {
             } else { @($definition.runs.steps) }
             foreach ($step in $steps) {
                 if ($step['uses'] -notmatch 'download-artifact|artifact-download') { continue }
+                if ($document.FullName -ieq (Join-Path $root '.github\actions\artifact-download\action.yml')) {
+                    $step.uses | Should -BeExactly 'actions/download-artifact@v8'
+                    continue
+                }
                 $downloads += $step
                 $step.uses | Should -BeIn @(
                     '$/.github/actions/artifact-download',
@@ -647,6 +664,13 @@ Describe 'Same-run artifact download audit' {
                     $step.with['producer-job-prefix'] | Should -Not -BeNullOrEmpty
                     $step.with['producer-step'] | Should -Not -BeNullOrEmpty
                     $step.with['artifact-name-prefix'] | Should -Not -BeNullOrEmpty
+                    $step.with['expected-identities'] | Should -Not -BeNullOrEmpty
+                }
+                elseif ($selectors[0] -ceq 'name') {
+                    $step.with['producer-job-prefix'] | Should -Not -BeNullOrEmpty
+                    $step.with['producer-step'] | Should -Not -BeNullOrEmpty
+                    $step.with.ContainsKey('artifact-name-prefix') | Should -BeFalse
+                    $step.with.ContainsKey('expected-identities') | Should -BeFalse
                 }
                 else {
                     $step.with.ContainsKey('producer-job-prefix') | Should -BeFalse
@@ -656,6 +680,7 @@ Describe 'Same-run artifact download audit' {
                 $step.with['github-token'] | Should -BeExactly '${{ github.token }}'
                 $step.with.repository | Should -BeExactly '${{ github.repository }}'
                 $step.with['run-id'] | Should -BeExactly '${{ github.run_id }}'
+                $step.with['run-attempt'] | Should -BeExactly '${{ github.run_attempt }}'
                 $step.with['api-url'] | Should -BeExactly '${{ github.api_url }}'
                 $step.with.ContainsKey('merge-multiple') | Should -BeFalse
             }
@@ -979,6 +1004,9 @@ Describe 'Hosted source collection reconciliation' {
         $fixtureDownload = @($downloads | Where-Object { $_.with['name'] })[0]
         $fixtureDownload.with.name | Should -BeExactly $fixture.with.name
         $fixtureDownload.with['api-url'] | Should -BeExactly '${{ github.api_url }}'
+        $fixtureDownload.with['producer-job-prefix'] |
+            Should -BeExactly 'cbh-collect:action-canary-${{ matrix.runner }}:${{ matrix.runner }}'
+        $fixtureDownload.with['producer-step'] | Should -BeExactly 'Upload the portable baseline fixture'
     }
 
     It 'keeps collection and analysis on the same manifest-selected source revision' {

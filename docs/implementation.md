@@ -163,20 +163,22 @@ directory-derived project identity. The PR's frozen base can be fetched from the
 invocation checkout locally, without a persisted Git credential or another network
 authentication path.
 
-The `artifact-download` composite resolves every same-run handoff through the
-authenticated GitHub REST artifact inventory. ID-, exact-name and wildcard-pattern
-selectors share a bounded retry budget for temporarily missing metadata and archive
-URLs. The retry also covers a listed artifact whose archive endpoint is not yet
-downloadable. Pattern consumers derive the exact expected immutable names from
-completed producer-job upload steps across run attempts. Reusable-workflow names
-normalize to their final job component. Copies of untouched successful jobs in later
-rerun attempts retain the original execution attempt and cannot require a second
-artifact. A partial inventory remains incomplete until every expected receipt is
-visible. The retry does not cover
-authentication, authorization, service, validation, extraction or expired-artifact
-errors. The final missing-artifact error identifies the run after exhausting the
-budget. Internal workflows use this action before analysis or result reconciliation,
-preserving name and pattern directory layouts.
+The `artifact-download` composite gates every same-run handoff on the
+authenticated GitHub REST artifact inventory, then delegates archive transfer,
+extraction and selector layout to the official download action. ID-, exact-name
+and wildcard-pattern selectors share a bounded retry budget and per-request
+timeout for missing metadata and recognized transient API failures. Direct
+archive operations remain official-action behavior rather than a second custom
+downloader. Pattern consumers require one artifact family for each declared
+producer identity. Reusable-workflow names normalize to their final job component.
+For every identity, the newest matching artifact must be at least as new as that
+producer's retained start time when the selected attempt reports a successful
+upload step. Untouched inherited jobs retain their original timestamps and remain
+eligible; rerun producers cannot reuse an older artifact. Duplicate pattern names
+never supply a missing identity. Benchmark receipt and lifecycle decisions remain
+owned by the companion. The retry does not cover authentication, authorization,
+deterministic not-found, validation or ordinary transport errors. The final
+incomplete-inventory error identifies the run after exhausting the budget.
 
 `Workflow.psm1` owns only paths, installer selection, input files and native argument
 vectors. It calls the same `Install-ActionTools` used by the root and availability

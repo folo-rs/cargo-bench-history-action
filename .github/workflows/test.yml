@@ -250,7 +250,10 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
           api-url: ${{ github.api_url }}
+          producer-job-prefix: 'cbh-collect:action-canary-${{ matrix.runner }}:${{ matrix.runner }}'
+          producer-step: Upload the portable baseline fixture
       - name: Restore the measured checkout and baseline store
         id: fixture
         shell: pwsh
@@ -289,10 +292,12 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
           api-url: ${{ github.api_url }}
           producer-job-prefix: 'cbh-collect:action-canary-${{ matrix.runner }}:${{ matrix.runner }}'
           producer-step: Upload immutable collection-attempt evidence
           artifact-name-prefix: canary-source-receipt-${{ matrix.rust_target }}-
+          expected-identities: ${{ matrix.runner }}
       - name: Reconcile actual completed collection jobs
         id: collection
         if: steps.fixture.outputs.skipped != 'true'

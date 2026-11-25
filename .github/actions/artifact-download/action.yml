@@ -1,5 +1,5 @@
 name: Internal same-run artifact download
-description: Download same-run artifacts with a bounded wait for eventual visibility.
+description: Wait for same-run artifacts to be visible, then use the official downloader.
 
 inputs:
   api-url:
@@ -10,6 +10,9 @@ inputs:
     required: true
   run-id:
     description: Workflow run that owns the requested artifacts.
+    required: true
+  run-attempt:
+    description: Current workflow attempt used for producer freshness.
     required: true
   github-token:
     description: Token with actions read permission for the selected run.
@@ -27,17 +30,20 @@ inputs:
     description: Artifact-name wildcard, mutually exclusive with artifact-ids and name.
     default: ''
   producer-job-prefix:
-    description: Prefix of completed jobs that can produce pattern-selected artifacts.
+    description: Prefix of jobs that can produce name- or pattern-selected artifacts.
     default: ''
   producer-step:
-    description: Exact successful upload step that establishes a pattern artifact.
+    description: Exact successful upload step that establishes artifact freshness.
     default: ''
   artifact-name-prefix:
-    description: Prefix of the immutable artifacts emitted by matching producer jobs.
+    description: Prefix of immutable artifacts emitted by matching pattern producers.
     default: ''
   artifact-name-includes-job-suffix:
     description: Insert each producer job name suffix before its run attempt.
     default: 'false'
+  expected-identities:
+    description: Comma-separated producer identities required for a pattern.
+    default: ''
   merge-multiple:
     description: Extract all selected artifacts directly into the destination.
     default: 'false'
@@ -45,14 +51,14 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Download selected same-run artifacts
+    - name: Wait for selected same-run artifacts
       shell: pwsh
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         CBH_ARTIFACT_API_URL: ${{ inputs.api-url }}
         CBH_ARTIFACT_REPOSITORY: ${{ inputs.repository }}
         CBH_ARTIFACT_RUN_ID: ${{ inputs.run-id }}
-        CBH_ARTIFACT_PATH: ${{ inputs.path }}
+        CBH_ARTIFACT_RUN_ATTEMPT: ${{ inputs.run-attempt }}
         CBH_ARTIFACT_IDS: ${{ inputs.artifact-ids }}
         CBH_ARTIFACT_NAME: ${{ inputs.name }}
         CBH_ARTIFACT_PATTERN: ${{ inputs.pattern }}
@@ -60,27 +66,33 @@ runs:
         CBH_ARTIFACT_PRODUCER_STEP: ${{ inputs.producer-step }}
         CBH_ARTIFACT_NAME_PREFIX: ${{ inputs.artifact-name-prefix }}
         CBH_ARTIFACT_NAME_INCLUDES_JOB_SUFFIX: ${{ inputs.artifact-name-includes-job-suffix }}
-        CBH_ARTIFACT_MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
+        CBH_ARTIFACT_EXPECTED_IDENTITIES: ${{ inputs.expected-identities }}
         CBH_ACTION_PATH: ${{ github.action_path }}
       run: |
-        $mergeMultiple = if ($env:CBH_ARTIFACT_MERGE_MULTIPLE -ceq 'true') { $true }
-        elseif ($env:CBH_ARTIFACT_MERGE_MULTIPLE -ceq 'false') { $false }
-        else { throw "merge-multiple must be true or false." }
         $includeJobSuffix = if ($env:CBH_ARTIFACT_NAME_INCLUDES_JOB_SUFFIX -ceq 'true') { $true }
         elseif ($env:CBH_ARTIFACT_NAME_INCLUDES_JOB_SUFFIX -ceq 'false') { $false }
         else { throw "artifact-name-includes-job-suffix must be true or false." }
-        $parameters = @{
-          ApiUrl = $env:CBH_ARTIFACT_API_URL
-          Repository = $env:CBH_ARTIFACT_REPOSITORY
-          RunId = $env:CBH_ARTIFACT_RUN_ID
-          Path = $env:CBH_ARTIFACT_PATH
-          ArtifactIds = $env:CBH_ARTIFACT_IDS
-          Name = $env:CBH_ARTIFACT_NAME
-          Pattern = $env:CBH_ARTIFACT_PATTERN
-          ProducerJobPrefix = $env:CBH_ARTIFACT_PRODUCER_JOB_PREFIX
-          ProducerStep = $env:CBH_ARTIFACT_PRODUCER_STEP
-          ArtifactNamePrefix = $env:CBH_ARTIFACT_NAME_PREFIX
-          ArtifactNameIncludesJobSuffix = $includeJobSuffix
-          MergeMultiple = $mergeMultiple
-        }
-        & (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'Download-Artifact.ps1') @parameters
+        Import-Module (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'ArtifactVisibility.psm1') -Force
+        Wait-ArtifactVisibility -ApiUrl $env:CBH_ARTIFACT_API_URL `
+          -Repository $env:CBH_ARTIFACT_REPOSITORY -RunId $env:CBH_ARTIFACT_RUN_ID `
+          -RunAttempt $env:CBH_ARTIFACT_RUN_ATTEMPT `
+          -GitHubToken $env:GH_TOKEN -ArtifactIds $env:CBH_ARTIFACT_IDS `
+          -Name $env:CBH_ARTIFACT_NAME -Pattern $env:CBH_ARTIFACT_PATTERN `
+          -ProducerJobPrefix $env:CBH_ARTIFACT_PRODUCER_JOB_PREFIX `
+          -ProducerStep $env:CBH_ARTIFACT_PRODUCER_STEP `
+          -ArtifactNamePrefix $env:CBH_ARTIFACT_NAME_PREFIX `
+          -ArtifactNameIncludesJobSuffix:$includeJobSuffix `
+          -ExpectedIdentities $env:CBH_ARTIFACT_EXPECTED_IDENTITIES
+    # Official action behavior owns archive transfer, extraction and selector
+    # layout after the authenticated run inventory proves complete visibility.
+    - name: Download selected same-run artifacts
+      uses: actions/download-artifact@v8
+      with:
+        artifact-ids: ${{ inputs.artifact-ids }}
+        name: ${{ inputs.name }}
+        pattern: ${{ inputs.pattern }}
+        path: ${{ inputs.path }}
+        merge-multiple: ${{ inputs.merge-multiple }}
+        github-token: ${{ inputs.github-token }}
+        repository: ${{ inputs.repository }}
+        run-id: ${{ inputs.run-id }}
