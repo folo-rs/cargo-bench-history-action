@@ -84,32 +84,43 @@ runs:
           -ArtifactNamePrefix $env:CBH_ARTIFACT_NAME_PREFIX `
           -ArtifactNameIncludesJobSuffix:$includeJobSuffix `
           -ExpectedIdentities $env:CBH_ARTIFACT_EXPECTED_IDENTITIES)
+        $staging = Join-Path $env:RUNNER_TEMP "cbh-artifacts-$([guid]::NewGuid().ToString('N'))"
         "ids=$($selection.Id -join ',')" >> $env:GITHUB_OUTPUT
         "selection=$(ConvertTo-Json -InputObject $selection -Compress)" >> $env:GITHUB_OUTPUT
-        "staging=$(Join-Path $env:RUNNER_TEMP "cbh-artifacts-$([guid]::NewGuid().ToString('N'))")" >> $env:GITHUB_OUTPUT
-    # Same-run single-ID transfer first uses the artifact service. Multiple IDs
-    # retain the token because their run-local view can be narrower.
-    - name: Download selected same-run artifacts
-      id: transfer
-      if: steps.selected.outputs.ids != ''
+        "staging=$staging" >> $env:GITHUB_OUTPUT
+    # A single same-run ID uses the artifact service without overriding any
+    # credential defaults. Multiple IDs retain the token because their inventory
+    # can be narrower than the same-run client view.
+    - name: Download one selected same-run artifact
+      id: transfer-single
+      if: steps.selected.outputs.ids != '' && !contains(steps.selected.outputs.ids, ',')
       continue-on-error: true
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
         artifact-ids: ${{ steps.selected.outputs.ids }}
         path: ${{ steps.selected.outputs.staging }}/first
         merge-multiple: ${{ inputs.merge-multiple }}
-        github-token: ${{ contains(steps.selected.outputs.ids, ',') && inputs.github-token || '' }}
-        repository: ${{ contains(steps.selected.outputs.ids, ',') && inputs.repository || '' }}
-        run-id: ${{ contains(steps.selected.outputs.ids, ',') && inputs.run-id || '' }}
+    - name: Download selected same-run artifact set
+      id: transfer-multiple
+      if: contains(steps.selected.outputs.ids, ',')
+      continue-on-error: true
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        path: ${{ steps.selected.outputs.staging }}/first
+        merge-multiple: ${{ inputs.merge-multiple }}
+        github-token: ${{ inputs.github-token }}
+        repository: ${{ inputs.repository }}
+        run-id: ${{ inputs.run-id }}
     - name: Check first transfer against frozen selection
       id: complete
-      if: steps.transfer.outcome == 'success'
+      if: steps.transfer-single.outcome == 'success' || steps.transfer-multiple.outcome == 'success'
       continue-on-error: true
       shell: pwsh
       env:
         CBH_ACTION_PATH: ${{ github.action_path }}
         CBH_SELECTION: ${{ steps.selected.outputs.selection }}
-        CBH_SOURCE: ${{ steps.transfer.outputs.download-path }}
+        CBH_SOURCE: ${{ steps.transfer-single.outcome == 'success' && steps.transfer-single.outputs.download-path || steps.transfer-multiple.outputs.download-path }}
         CBH_MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
       run: |
         $mergeMultiple = if ($env:CBH_MERGE_MULTIPLE -ceq 'true') { $true }
@@ -121,14 +132,17 @@ runs:
           -MergeMultiple:$mergeMultiple
     - name: Check archive access before retrying failed transfer
       id: archive
-      if: steps.transfer.outcome == 'failure' || steps.complete.outcome == 'failure'
+      if: >-
+        steps.transfer-single.outcome == 'failure' ||
+        steps.transfer-multiple.outcome == 'failure' ||
+        steps.complete.outcome == 'failure'
       shell: pwsh
       env:
         CBH_ACTION_PATH: ${{ github.action_path }}
         CBH_ARTIFACT_IDS: ${{ steps.selected.outputs.ids }}
         CBH_API_URL: ${{ inputs.api-url }}
         CBH_REPOSITORY: ${{ inputs.repository }}
-        CBH_ALLOW_READY_REDIRECT: ${{ steps.transfer.outcome == 'success' && steps.complete.outcome == 'failure' }}
+        CBH_ALLOW_READY_REDIRECT: ${{ (steps.transfer-single.outcome == 'success' || steps.transfer-multiple.outcome == 'success') && steps.complete.outcome == 'failure' }}
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
         Write-Warning 'Artifact transfer failed. Checking archive access with the workflow token before retrying.'
@@ -140,24 +154,49 @@ runs:
           -Repository $env:CBH_REPOSITORY -ArtifactIds ($env:CBH_ARTIFACT_IDS -split ',') `
           -GitHubToken $env:GH_TOKEN -AllowReadyRedirect:$allowReadyRedirect
         "rest=$useRest" >> $env:GITHUB_OUTPUT
-    - name: Retry archive transfer
-      id: retry
-      if: steps.archive.outcome == 'success'
+    - name: Retry one archive transfer with REST access
+      id: retry-single-rest
+      if: >-
+        steps.archive.outcome == 'success' &&
+        steps.archive.outputs.rest == 'true' &&
+        !contains(steps.selected.outputs.ids, ',')
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
         artifact-ids: ${{ steps.selected.outputs.ids }}
-        path: ${{ steps.selected.outputs.staging }}/retry
+        path: ${{ steps.selected.outputs.staging }}/retry-rest
         merge-multiple: ${{ inputs.merge-multiple }}
-        github-token: ${{ steps.archive.outputs.rest == 'true' && inputs.github-token || '' }}
-        repository: ${{ steps.archive.outputs.rest == 'true' && inputs.repository || '' }}
-        run-id: ${{ steps.archive.outputs.rest == 'true' && inputs.run-id || '' }}
+        github-token: ${{ inputs.github-token }}
+        repository: ${{ inputs.repository }}
+        run-id: ${{ inputs.run-id }}
+    - name: Retry one archive transfer with the same-run service
+      id: retry-single-service
+      if: >-
+        steps.archive.outcome == 'success' &&
+        steps.archive.outputs.rest == 'false' &&
+        !contains(steps.selected.outputs.ids, ',')
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        path: ${{ steps.selected.outputs.staging }}/retry-service
+        merge-multiple: ${{ inputs.merge-multiple }}
+    - name: Retry selected artifact set with REST access
+      id: retry-multiple
+      if: steps.archive.outcome == 'success' && contains(steps.selected.outputs.ids, ',')
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        path: ${{ steps.selected.outputs.staging }}/retry-multiple
+        merge-multiple: ${{ inputs.merge-multiple }}
+        github-token: ${{ inputs.github-token }}
+        repository: ${{ inputs.repository }}
+        run-id: ${{ inputs.run-id }}
     - name: Expose only the completed download
       if: steps.selected.outputs.ids != ''
       shell: pwsh
       env:
         CBH_ACTION_PATH: ${{ github.action_path }}
         CBH_SELECTION: ${{ steps.selected.outputs.selection }}
-        CBH_SOURCE: ${{ steps.complete.outcome == 'success' && steps.transfer.outputs.download-path || steps.retry.outputs.download-path }}
+        CBH_SOURCE: ${{ steps.complete.outcome == 'success' && (steps.transfer-single.outcome == 'success' && steps.transfer-single.outputs.download-path || steps.transfer-multiple.outputs.download-path) || (steps.retry-single-rest.outcome == 'success' && steps.retry-single-rest.outputs.download-path || steps.retry-single-service.outcome == 'success' && steps.retry-single-service.outputs.download-path || steps.retry-multiple.outputs.download-path) }}
         CBH_DESTINATION: ${{ inputs.path }}
         CBH_MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
       run: |
