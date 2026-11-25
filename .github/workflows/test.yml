@@ -243,13 +243,14 @@ jobs:
         with:
           toolchain: stable
       - name: Download the selected platform's portable fixture
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/artifact-download
         with:
           name: canary-source-fixture-${{ matrix.rust_target }}
           path: ${{ runner.temp }}/source-canary
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
+          api-url: ${{ github.api_url }}
       - name: Restore the measured checkout and baseline store
         id: fixture
         shell: pwsh
@@ -281,13 +282,14 @@ jobs:
           }
       - name: Download every collection attempt for this platform
         if: steps.fixture.outputs.skipped != 'true'
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/artifact-download
         with:
           pattern: canary-source-receipt-${{ matrix.rust_target }}-*
           path: ${{ steps.fixture.outputs.root }}/receipts
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
+          api-url: ${{ github.api_url }}
       - name: Reconcile actual completed collection jobs
         id: collection
         if: steps.fixture.outputs.skipped != 'true'

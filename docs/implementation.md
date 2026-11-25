@@ -151,7 +151,7 @@ override; unset or `false` preserves ordinary published-installation caching.
 ## Reusable workflow orchestration
 
 `history.yml`, `pr.yml` and `backfill.yml` use `$/` self references to run this
-repository's root action and internal `workflow-tools` composite at the called workflow's exact commit.
+repository's root action and internal composites at the called workflow's exact commit.
 The caller's checkout cannot select that implementation. This requires GitHub.com
 runner 2.336.0 or newer; actionlint's unsupported self/queue diagnostics have exact,
 path-scoped compatibility exceptions.
@@ -162,6 +162,15 @@ holds the frozen measurement head. Its basename matches the repository name to r
 directory-derived project identity. The PR's frozen base can be fetched from the
 invocation checkout locally, without a persisted Git credential or another network
 authentication path.
+
+The `artifact-download` composite resolves every same-run handoff through the
+authenticated GitHub REST artifact inventory. ID-, exact-name and wildcard-pattern
+selectors share a bounded retry budget for temporarily missing metadata and archive
+URLs. The retry also covers a listed artifact whose archive endpoint is not yet
+downloadable. It does not retry authentication, authorization, service, validation,
+extraction or expired-artifact errors. The final missing-artifact error identifies
+the run after exhausting the budget. Internal workflows use this action before
+analysis or result reconciliation, preserving name and pattern directory layouts.
 
 `Workflow.psm1` owns only paths, installer selection, input files and native argument
 vectors. It calls the same `Install-ActionTools` used by the root and availability

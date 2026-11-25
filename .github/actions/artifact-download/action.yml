@@ -1,0 +1,63 @@
+name: Internal same-run artifact download
+description: Download same-run artifacts with a bounded wait for eventual visibility.
+
+inputs:
+  api-url:
+    description: GitHub REST API base URL.
+    required: true
+  repository:
+    description: Repository in owner/name form.
+    required: true
+  run-id:
+    description: Workflow run that owns the requested artifacts.
+    required: true
+  github-token:
+    description: Token with actions read permission for the selected run.
+    required: true
+  path:
+    description: Directory that receives the extracted artifacts.
+    required: true
+  artifact-ids:
+    description: Comma-separated artifact IDs, mutually exclusive with name and pattern.
+    default: ''
+  name:
+    description: Exact artifact name, mutually exclusive with artifact-ids and pattern.
+    default: ''
+  pattern:
+    description: Artifact-name wildcard, mutually exclusive with artifact-ids and name.
+    default: ''
+  merge-multiple:
+    description: Extract all selected artifacts directly into the destination.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Download selected same-run artifacts
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CBH_ARTIFACT_API_URL: ${{ inputs.api-url }}
+        CBH_ARTIFACT_REPOSITORY: ${{ inputs.repository }}
+        CBH_ARTIFACT_RUN_ID: ${{ inputs.run-id }}
+        CBH_ARTIFACT_PATH: ${{ inputs.path }}
+        CBH_ARTIFACT_IDS: ${{ inputs.artifact-ids }}
+        CBH_ARTIFACT_NAME: ${{ inputs.name }}
+        CBH_ARTIFACT_PATTERN: ${{ inputs.pattern }}
+        CBH_ARTIFACT_MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
+        CBH_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        $mergeMultiple = if ($env:CBH_ARTIFACT_MERGE_MULTIPLE -ceq 'true') { $true }
+        elseif ($env:CBH_ARTIFACT_MERGE_MULTIPLE -ceq 'false') { $false }
+        else { throw "merge-multiple must be true or false." }
+        $parameters = @{
+          ApiUrl = $env:CBH_ARTIFACT_API_URL
+          Repository = $env:CBH_ARTIFACT_REPOSITORY
+          RunId = $env:CBH_ARTIFACT_RUN_ID
+          Path = $env:CBH_ARTIFACT_PATH
+          ArtifactIds = $env:CBH_ARTIFACT_IDS
+          Name = $env:CBH_ARTIFACT_NAME
+          Pattern = $env:CBH_ARTIFACT_PATTERN
+          MergeMultiple = $mergeMultiple
+        }
+        & (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'Download-Artifact.ps1') @parameters
