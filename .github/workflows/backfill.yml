@@ -249,6 +249,10 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
           api-url: ${{ github.api_url }}
+          producer-job-prefix: 'cbh-backfill:${{ needs.prepare.outputs.instance }}:'
+          producer-step: Upload completion even after a stopping benchmark failure
+          artifact-name-prefix: cbh-backfill-completion-${{ needs.prepare.outputs.instance }}-
+          artifact-name-includes-job-suffix: 'true'
       - name: Select the executed backfill attempts
         id: selection
         if: always() && needs.prepare.outputs.has-work == 'true' && steps.context.outcome == 'success'

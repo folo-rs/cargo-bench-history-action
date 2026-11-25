@@ -643,6 +643,16 @@ Describe 'Same-run artifact download audit' {
                 $selectors = @('artifact-ids', 'name', 'pattern' |
                         Where-Object { $step.with.ContainsKey($_) -and $step.with[$_] })
                 $selectors.Count | Should -Be 1
+                if ($selectors[0] -ceq 'pattern') {
+                    $step.with['producer-job-prefix'] | Should -Not -BeNullOrEmpty
+                    $step.with['producer-step'] | Should -Not -BeNullOrEmpty
+                    $step.with['artifact-name-prefix'] | Should -Not -BeNullOrEmpty
+                }
+                else {
+                    $step.with.ContainsKey('producer-job-prefix') | Should -BeFalse
+                    $step.with.ContainsKey('producer-step') | Should -BeFalse
+                    $step.with.ContainsKey('artifact-name-prefix') | Should -BeFalse
+                }
                 $step.with['github-token'] | Should -BeExactly '${{ github.token }}'
                 $step.with.repository | Should -BeExactly '${{ github.repository }}'
                 $step.with['run-id'] | Should -BeExactly '${{ github.run_id }}'

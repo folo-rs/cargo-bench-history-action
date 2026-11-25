@@ -290,6 +290,9 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
           api-url: ${{ github.api_url }}
+          producer-job-prefix: 'cbh-collect:action-canary-${{ matrix.runner }}:${{ matrix.runner }}'
+          producer-step: Upload immutable collection-attempt evidence
+          artifact-name-prefix: canary-source-receipt-${{ matrix.rust_target }}-
       - name: Reconcile actual completed collection jobs
         id: collection
         if: steps.fixture.outputs.skipped != 'true'

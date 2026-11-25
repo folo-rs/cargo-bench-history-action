@@ -26,6 +26,18 @@ inputs:
   pattern:
     description: Artifact-name wildcard, mutually exclusive with artifact-ids and name.
     default: ''
+  producer-job-prefix:
+    description: Prefix of completed jobs that can produce pattern-selected artifacts.
+    default: ''
+  producer-step:
+    description: Exact successful upload step that establishes a pattern artifact.
+    default: ''
+  artifact-name-prefix:
+    description: Prefix of the immutable artifacts emitted by matching producer jobs.
+    default: ''
+  artifact-name-includes-job-suffix:
+    description: Insert each producer job name suffix before its run attempt.
+    default: 'false'
   merge-multiple:
     description: Extract all selected artifacts directly into the destination.
     default: 'false'
@@ -44,12 +56,19 @@ runs:
         CBH_ARTIFACT_IDS: ${{ inputs.artifact-ids }}
         CBH_ARTIFACT_NAME: ${{ inputs.name }}
         CBH_ARTIFACT_PATTERN: ${{ inputs.pattern }}
+        CBH_ARTIFACT_PRODUCER_JOB_PREFIX: ${{ inputs.producer-job-prefix }}
+        CBH_ARTIFACT_PRODUCER_STEP: ${{ inputs.producer-step }}
+        CBH_ARTIFACT_NAME_PREFIX: ${{ inputs.artifact-name-prefix }}
+        CBH_ARTIFACT_NAME_INCLUDES_JOB_SUFFIX: ${{ inputs.artifact-name-includes-job-suffix }}
         CBH_ARTIFACT_MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
         CBH_ACTION_PATH: ${{ github.action_path }}
       run: |
         $mergeMultiple = if ($env:CBH_ARTIFACT_MERGE_MULTIPLE -ceq 'true') { $true }
         elseif ($env:CBH_ARTIFACT_MERGE_MULTIPLE -ceq 'false') { $false }
         else { throw "merge-multiple must be true or false." }
+        $includeJobSuffix = if ($env:CBH_ARTIFACT_NAME_INCLUDES_JOB_SUFFIX -ceq 'true') { $true }
+        elseif ($env:CBH_ARTIFACT_NAME_INCLUDES_JOB_SUFFIX -ceq 'false') { $false }
+        else { throw "artifact-name-includes-job-suffix must be true or false." }
         $parameters = @{
           ApiUrl = $env:CBH_ARTIFACT_API_URL
           Repository = $env:CBH_ARTIFACT_REPOSITORY
@@ -58,6 +77,10 @@ runs:
           ArtifactIds = $env:CBH_ARTIFACT_IDS
           Name = $env:CBH_ARTIFACT_NAME
           Pattern = $env:CBH_ARTIFACT_PATTERN
+          ProducerJobPrefix = $env:CBH_ARTIFACT_PRODUCER_JOB_PREFIX
+          ProducerStep = $env:CBH_ARTIFACT_PRODUCER_STEP
+          ArtifactNamePrefix = $env:CBH_ARTIFACT_NAME_PREFIX
+          ArtifactNameIncludesJobSuffix = $includeJobSuffix
           MergeMultiple = $mergeMultiple
         }
         & (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'Download-Artifact.ps1') @parameters

@@ -14,9 +14,13 @@ $script:DefaultRetryDelaySeconds = 2
 function Get-ArtifactHttpStatusCode {
     param([Parameter(Mandatory)] [System.Management.Automation.ErrorRecord] $ErrorRecord)
 
-    $response = $ErrorRecord.Exception.Response
+    $responseProperty = $ErrorRecord.Exception.PSObject.Properties['Response']
+    if ($null -eq $responseProperty) { return $null }
+    $response = $responseProperty.Value
     if ($null -eq $response) { return $null }
-    return [int] $response.StatusCode
+    $statusProperty = $response.PSObject.Properties['StatusCode']
+    if ($null -eq $statusProperty) { return $null }
+    return [int] $statusProperty.Value
 }
 
 # Reads one validated JSON property without assuming that mocked and real REST
@@ -24,13 +28,24 @@ function Get-ArtifactHttpStatusCode {
 function Get-ArtifactResponseProperty {
     param([Parameter(Mandatory)] $Response, [Parameter(Mandatory)] [string] $Name)
 
-    $property = if ($Response -is [System.Collections.IDictionary]) {
-        if (-not $Response.Contains($Name)) { $null } else { $Response[$Name] }
-    } else {
-        $member = $Response.PSObject.Properties[$Name]
-        if ($null -eq $member) { $null } else { $member.Value }
+    $found = $false
+    $property = $null
+    if ($Response -is [System.Collections.IDictionary]) {
+        if ($Response.Contains($Name)) {
+            $found = $true
+            $property = $Response[$Name]
+        }
     }
-    if ($null -eq $property) { throw "GitHub artifact response omitted required property '$Name'." }
+    else {
+        $member = $Response.PSObject.Properties[$Name]
+        if ($null -ne $member) {
+            $found = $true
+            $property = $member.Value
+        }
+    }
+    if (-not $found -or $null -eq $property) {
+        throw "GitHub artifact response omitted required property '$Name'."
+    }
     return $property
 }
 
@@ -76,6 +91,82 @@ function Get-GitHubRunArtifacts {
     }
 }
 
+# Lists every job for all attempts in one run. Pattern consumers use completed
+# producer steps to establish the exact immutable artifact names they must await.
+function Get-GitHubRunJobs {
+    param(
+        [Parameter(Mandatory)] [string] $ApiUrl,
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [long] $RunId,
+        [Parameter(Mandatory)] [hashtable] $Headers
+    )
+
+    $jobs = @()
+    $expected = $null
+    $page = 1
+    $base = $ApiUrl.TrimEnd('/')
+    while ($true) {
+        $uri = "$base/repos/$Repository/actions/runs/$RunId/jobs?filter=all&per_page=100&page=$page"
+        $response = Invoke-RestMethod -Uri $uri -Headers $Headers -ErrorAction Stop
+        if ($null -eq $expected) {
+            $expected = [int] (Get-ArtifactResponseProperty -Response $response -Name 'total_count')
+        }
+        $batch = @(Get-ArtifactResponseProperty -Response $response -Name 'jobs')
+        $jobs += $batch
+        if ($jobs.Count -ge $expected) { return @($jobs) }
+        if ($batch.Count -eq 0) {
+            throw "GitHub returned an incomplete job inventory for workflow run $RunId."
+        }
+        $page++
+    }
+}
+
+# Resolves exact artifact names from successful producer jobs across run
+# attempts. This keeps retry completeness tied to authenticated job evidence,
+# while artifact naming remains explicit workflow data rather than a benchmark decision.
+function Get-ExpectedArtifactNames {
+    param(
+        [Parameter(Mandatory)] [string] $ApiUrl,
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [long] $RunId,
+        [Parameter(Mandatory)] [string] $JobPrefix,
+        [Parameter(Mandatory)] [string] $StepName,
+        [Parameter(Mandatory)] [string] $ArtifactNamePrefix,
+        [Parameter(Mandatory)] [hashtable] $Headers,
+        [bool] $IncludeJobSuffix
+    )
+
+    $names = @(
+        foreach ($job in @(Get-GitHubRunJobs -ApiUrl $ApiUrl -Repository $Repository -RunId $RunId -Headers $Headers)) {
+            $jobName = [string] (Get-ArtifactResponseProperty -Response $job -Name 'name')
+            if (-not $jobName.StartsWith($JobPrefix, [StringComparison]::Ordinal)) { continue }
+            $successfulStep = @(
+                Get-ArtifactResponseProperty -Response $job -Name 'steps' | Where-Object {
+                    (Get-ArtifactResponseProperty -Response $_ -Name 'name') -ceq $StepName -and
+                    (Get-ArtifactResponseProperty -Response $_ -Name 'conclusion') -ceq 'success'
+                }
+            )
+            if ($successfulStep.Count -eq 0) { continue }
+            $attempt = [long] (Get-ArtifactResponseProperty -Response $job -Name 'run_attempt')
+            if ($IncludeJobSuffix) {
+                $suffix = $jobName.Substring($JobPrefix.Length)
+                if ([string]::IsNullOrEmpty($suffix)) {
+                    throw "Producer job '$jobName' has no identity suffix after '$JobPrefix'."
+                }
+                "$ArtifactNamePrefix$suffix-$attempt"
+            }
+            else {
+                "$ArtifactNamePrefix$attempt"
+            }
+        }
+    )
+    $unique = @($names | Select-Object -Unique)
+    if ($unique.Count -ne $names.Count) {
+        throw 'Completed producer jobs map to duplicate artifact names.'
+    }
+    return @($unique)
+}
+
 # Resolves an artifact ID directly, treating only an HTTP not-found response as
 # temporary eventual-visibility evidence.
 function Get-GitHubArtifact {
@@ -119,32 +210,36 @@ function Select-GitHubArtifacts {
     }
 
     $headers = Get-ArtifactHeaders -GitHubToken $GitHubToken
-    $selected = if ($selectors[0] -ceq 'artifact-ids') {
-        $ids = @($ArtifactIds -split ',' | ForEach-Object {
-                $value = $_.Trim()
-                if ($value -notmatch '^[1-9][0-9]*$') { throw "Invalid artifact ID '$value'." }
-                [long] $value
-            })
-        if (@($ids | Select-Object -Unique).Count -ne $ids.Count) {
-            throw 'Artifact IDs must be unique.'
-        }
-        foreach ($id in $ids) {
-            $artifact = Get-GitHubArtifact -ApiUrl $ApiUrl -Repository $Repository -ArtifactId $id -Headers $headers
-            if ($null -eq $artifact) { return @() }
-            $artifact
-        }
-    } else {
-        $available = @(Get-GitHubRunArtifacts -ApiUrl $ApiUrl -Repository $Repository -RunId $RunId -Headers $headers)
-        if ($selectors[0] -ceq 'name') {
-            @($available | Where-Object {
-                    (Get-ArtifactResponseProperty -Response $_ -Name 'name') -ceq $Name
+    $selected = @(
+        if ($selectors[0] -ceq 'artifact-ids') {
+            $ids = @($ArtifactIds -split ',' | ForEach-Object {
+                    $value = $_.Trim()
+                    if ($value -notmatch '^[1-9][0-9]*$') { throw "Invalid artifact ID '$value'." }
+                    [long] $value
                 })
-        } else {
-            @($available | Where-Object {
-                    (Get-ArtifactResponseProperty -Response $_ -Name 'name') -clike $Pattern
-                })
+            if (@($ids | Select-Object -Unique).Count -ne $ids.Count) {
+                throw 'Artifact IDs must be unique.'
+            }
+            foreach ($id in $ids) {
+                $artifact = Get-GitHubArtifact -ApiUrl $ApiUrl -Repository $Repository -ArtifactId $id -Headers $headers
+                if ($null -eq $artifact) { return @() }
+                $artifact
+            }
         }
-    }
+        else {
+            $available = @(Get-GitHubRunArtifacts -ApiUrl $ApiUrl -Repository $Repository -RunId $RunId -Headers $headers)
+            if ($selectors[0] -ceq 'name') {
+                @($available | Where-Object {
+                        (Get-ArtifactResponseProperty -Response $_ -Name 'name') -ceq $Name
+                    })
+            }
+            else {
+                @($available | Where-Object {
+                        (Get-ArtifactResponseProperty -Response $_ -Name 'name') -clike $Pattern
+                    })
+            }
+        }
+    )
 
     if ($selectors[0] -ceq 'name' -and $selected.Count -gt 1) {
         throw "Artifact name '$Name' unexpectedly matched more than one artifact in workflow run $RunId."
@@ -222,6 +317,10 @@ function Invoke-ArtifactDownload {
         [string] $ArtifactIds,
         [string] $Name,
         [string] $Pattern,
+        [string] $ProducerJobPrefix,
+        [string] $ProducerStep,
+        [string] $ArtifactNamePrefix,
+        [switch] $ArtifactNameIncludesJobSuffix,
         [switch] $MergeMultiple,
         [ValidateRange(1, 100)] [int] $MaximumAttempts = $script:DefaultMaximumAttempts,
         [ValidateRange(0, 60)] [int] $RetryDelaySeconds = $script:DefaultRetryDelaySeconds
@@ -241,6 +340,15 @@ function Invoke-ArtifactDownload {
     if ([string]::IsNullOrWhiteSpace($GitHubToken)) {
         throw 'Artifact download requires a GitHub token.'
     }
+    $producerInputs = @(
+        if (-not [string]::IsNullOrWhiteSpace($ProducerJobPrefix)) { 'producer-job-prefix' }
+        if (-not [string]::IsNullOrWhiteSpace($ProducerStep)) { 'producer-step' }
+        if (-not [string]::IsNullOrWhiteSpace($ArtifactNamePrefix)) { 'artifact-name-prefix' }
+    )
+    if (($selector[0] -ceq 'pattern' -and $producerInputs.Count -ne 3) -or
+        ($selector[0] -cne 'pattern' -and ($producerInputs.Count -ne 0 -or $ArtifactNameIncludesJobSuffix))) {
+        throw 'Pattern downloads require producer job, step and artifact-name inputs; other selectors reject them.'
+    }
 
     $destination = [IO.Path]::GetFullPath($Path)
     $temporaryRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
@@ -251,6 +359,17 @@ function Invoke-ArtifactDownload {
             $selected = @(Select-GitHubArtifacts -ApiUrl $ApiUrl -Repository $Repository -RunId $RunId `
                     -GitHubToken $GitHubToken -ArtifactIds $ArtifactIds -Name $Name -Pattern $Pattern)
             $ready = $selected.Count -gt 0
+            if ($selector[0] -ceq 'pattern') {
+                $expectedNames = @(Get-ExpectedArtifactNames -ApiUrl $ApiUrl -Repository $Repository -RunId $RunId `
+                        -JobPrefix $ProducerJobPrefix -StepName $ProducerStep -ArtifactNamePrefix $ArtifactNamePrefix `
+                        -Headers (Get-ArtifactHeaders -GitHubToken $GitHubToken) `
+                        -IncludeJobSuffix:$ArtifactNameIncludesJobSuffix)
+                $selectedNames = @($selected | ForEach-Object {
+                        [string] (Get-ArtifactResponseProperty -Response $_ -Name 'name')
+                    })
+                $missingNames = @($expectedNames | Where-Object { $selectedNames -notcontains $_ })
+                $ready = $selected.Count -gt 0 -and $expectedNames.Count -gt 0 -and $missingNames.Count -eq 0
+            }
             $archives = @()
             if ($ready) {
                 Remove-Item -LiteralPath (Join-Path $downloadRoot 'archives') -Recurse -Force -ErrorAction SilentlyContinue

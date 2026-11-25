@@ -167,10 +167,13 @@ The `artifact-download` composite resolves every same-run handoff through the
 authenticated GitHub REST artifact inventory. ID-, exact-name and wildcard-pattern
 selectors share a bounded retry budget for temporarily missing metadata and archive
 URLs. The retry also covers a listed artifact whose archive endpoint is not yet
-downloadable. It does not retry authentication, authorization, service, validation,
-extraction or expired-artifact errors. The final missing-artifact error identifies
-the run after exhausting the budget. Internal workflows use this action before
-analysis or result reconciliation, preserving name and pattern directory layouts.
+downloadable. Pattern consumers derive the exact expected immutable names from
+completed producer-job upload steps across run attempts, so a partial inventory
+remains incomplete until every expected receipt is visible. The retry does not cover
+authentication, authorization, service, validation, extraction or expired-artifact
+errors. The final missing-artifact error identifies the run after exhausting the
+budget. Internal workflows use this action before analysis or result reconciliation,
+preserving name and pattern directory layouts.
 
 `Workflow.psm1` owns only paths, installer selection, input files and native argument
 vectors. It calls the same `Install-ActionTools` used by the root and availability

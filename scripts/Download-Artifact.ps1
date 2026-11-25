@@ -10,6 +10,10 @@ param(
     [string] $ArtifactIds,
     [string] $Name,
     [string] $Pattern,
+    [string] $ProducerJobPrefix,
+    [string] $ProducerStep,
+    [string] $ArtifactNamePrefix,
+    [switch] $ArtifactNameIncludesJobSuffix,
     [switch] $MergeMultiple,
     [string] $GitHubToken = $env:GH_TOKEN
 )
@@ -28,6 +32,10 @@ $parameters = @{
     ArtifactIds = $ArtifactIds
     Name = $Name
     Pattern = $Pattern
+    ProducerJobPrefix = $ProducerJobPrefix
+    ProducerStep = $ProducerStep
+    ArtifactNamePrefix = $ArtifactNamePrefix
 }
+if ($ArtifactNameIncludesJobSuffix) { $parameters.ArtifactNameIncludesJobSuffix = $true }
 if ($MergeMultiple) { $parameters.MergeMultiple = $true }
 Invoke-ArtifactDownload @parameters
