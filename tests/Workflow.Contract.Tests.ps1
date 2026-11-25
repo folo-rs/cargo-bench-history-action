@@ -296,7 +296,8 @@ Describe 'Scoped <flow> collection handoff' -ForEach @(
 
     It 'downloads all attempts for this flow from the authenticated run-wide view' {
         $upload = @($collectionJob.steps | Where-Object { $_['uses'] -like 'actions/upload-artifact@*' })[0]
-        $download = @($analysisJob.steps | Where-Object { $_['uses'] -like 'actions/download-artifact@*' })[0]
+        $download = @($analysisJob.steps |
+                Where-Object { $_['uses'] -ceq '$/.github/actions/artifact-download' })[0]
         $download.with.pattern | Should -BeExactly ("$prefix-collection-" + '${{ needs.prepare.outputs.instance }}-*')
         $download.with['github-token'] | Should -BeExactly '${{ github.token }}'
         $download.with['run-id'] | Should -BeExactly '${{ github.run_id }}'
@@ -520,7 +521,8 @@ Describe 'Historical backfill graph behavior' {
             foreach ($step in $job.steps) {
                 if ($step['uses']) {
                     $step.uses | Should -BeIn @('$/', '$/.github/actions/workflow-tools',
-                        '$/.github/actions/workflow-results', 'actions/upload-artifact@v7', 'actions/download-artifact@v8')
+                        '$/.github/actions/workflow-results', '$/.github/actions/artifact-download',
+                        'actions/upload-artifact@v7')
                 }
             }
         }
@@ -577,7 +579,8 @@ Describe 'Actions result graph for <flow>' -ForEach @(
         $upload.if | Should -BeExactly "always() && steps.evidence.outcome == 'success'"
         $upload.with.name | Should -BeExactly 'cbh-backfill-completion-${{ needs.prepare.outputs.instance }}-${{ matrix.platform }}-${{ github.run_attempt }}'
         $upload.with.ContainsKey('overwrite') | Should -BeFalse
-        $download = @($resultWorkflow.jobs.result.steps | Where-Object { $_['uses'] -like 'actions/download-artifact@*' })[0]
+        $download = @($resultWorkflow.jobs.result.steps |
+                Where-Object { $_['uses'] -ceq '$/.github/actions/artifact-download' })[0]
         $download.with['run-id'] | Should -BeExactly '${{ github.run_id }}'
         $download.with['github-token'] | Should -BeExactly '${{ github.token }}'
         $download.with.ContainsKey('merge-multiple') | Should -BeFalse
@@ -859,7 +862,9 @@ Describe 'Hosted source collection reconciliation' {
         $receipt.with.path | Should -BeExactly '${{ steps.evidence.outputs.receipt }}'
         $receipt.with.name | Should -BeLike '*${{ github.run_attempt }}'
         $fixture.with.overwrite | Should -BeTrue
-        $downloads = @($sourceAnalyzer.steps | Where-Object { $_['uses'] -like 'actions/download-artifact@*' })
+        $downloads = @($sourceAnalyzer.steps | Where-Object {
+                $_['uses'] -ceq './.github/actions/artifact-download'
+            })
         $receiptDownload = @($downloads | Where-Object { $_.with['pattern'] })[0]
         $receiptDownload.with.pattern | Should -BeExactly 'canary-source-receipt-${{ matrix.rust_target }}-*'
         $receiptDownload.with['run-id'] | Should -BeExactly '${{ github.run_id }}'

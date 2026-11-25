@@ -292,13 +292,20 @@ jobs:
           key: bench-history-pr-${{ needs.prepare.outputs.instance }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: bench-history-${{ needs.prepare.outputs.instance }}-
       - name: Download collection attempts
-        uses: actions/download-artifact@v8
+        uses: $/.github/actions/artifact-download
         with:
           pattern: pr-bench-history-collection-${{ needs.prepare.outputs.instance }}-*
           path: ${{ steps.context.outputs.receipts-directory }}
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          api-url: ${{ github.api_url }}
+          producer-job-prefix: '${{ needs.prepare.outputs.collection-job-prefix }}:'
+          producer-step: Upload the receipt with its exact collection snapshot
+          artifact-name-prefix: pr-bench-history-collection-${{ needs.prepare.outputs.instance }}-
+          artifact-name-includes-job-suffix: 'true'
+          expected-identities: ${{ needs.prepare.outputs.expected-platforms }}
       - name: Reconcile latest platform attempts
         id: collection
         shell: pwsh
