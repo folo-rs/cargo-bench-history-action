@@ -167,15 +167,18 @@ The `artifact-download` composite gates every same-run handoff on the
 authenticated GitHub REST artifact inventory, then delegates archive transfer,
 extraction and selector layout to the official download action. ID-, exact-name
 and wildcard-pattern selectors share a bounded retry budget and per-request
-timeout for missing metadata and recognized transient API failures. Direct
-archive operations remain official-action behavior rather than a second custom
-downloader. Pattern consumers require one artifact family for each declared
+timeout for missing metadata, archive redirects and recognized transient API
+failures. Archive readiness performs only a non-body redirect check; the official
+action still owns transfer and extraction. Pattern consumers require one artifact
+family for each declared
 producer identity. Reusable-workflow names normalize to their final job component.
 For every identity, the newest matching artifact must be at least as new as that
 producer's retained start time when the selected attempt reports a successful
 upload step. Untouched inherited jobs retain their original timestamps and remain
 eligible; rerun producers cannot reuse an older artifact. Duplicate pattern names
-never supply a missing identity. Benchmark receipt and lifecycle decisions remain
+never supply a missing identity. A confirmed terminal producer that never reached
+upload contributes no required artifact and remains subject to companion failure
+classification. Benchmark receipt and lifecycle decisions remain
 owned by the companion. The retry does not cover authentication, authorization,
 deterministic not-found, validation or ordinary transport errors. The final
 incomplete-inventory error identifies the run after exhausting the budget.

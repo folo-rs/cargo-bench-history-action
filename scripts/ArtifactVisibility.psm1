@@ -10,6 +10,16 @@ $script:DefaultMaximumAttempts = 12
 $script:DefaultRetryDelaySeconds = 5
 $script:DefaultRequestTimeoutSeconds = 30
 
+# Represents a known HTTP response without allowing an archive readiness check
+# to hide a permanent status inside a generic script error.
+class ArtifactVisibilityHttpException : System.Exception {
+    [object] $Response
+
+    ArtifactVisibilityHttpException([int] $StatusCode) : base("HTTP $StatusCode") {
+        $this.Response = [pscustomobject]@{ StatusCode = $StatusCode }
+    }
+}
+
 # Extracts an HTTP status from real and mocked REST exceptions.
 function Get-ArtifactHttpStatusCode {
     param([Parameter(Mandatory)] [System.Management.Automation.ErrorRecord] $ErrorRecord)
@@ -58,6 +68,20 @@ function Get-ArtifactResponseProperty {
         throw "GitHub artifact response omitted required property '$Name'."
     }
     return $property
+}
+
+# Reads nullable job and step fields without treating an incomplete unrelated
+# producer snapshot as malformed.
+function Get-ArtifactOptionalProperty {
+    param([Parameter(Mandatory)] $Response, [Parameter(Mandatory)] [string] $Name)
+
+    if ($Response -is [System.Collections.IDictionary]) {
+        if ($Response.Contains($Name)) { return $Response[$Name] }
+        return $null
+    }
+    $member = $Response.PSObject.Properties[$Name]
+    if ($null -eq $member) { return $null }
+    return $member.Value
 }
 
 # Applies one timeout and authenticated header set to every bounded REST call.
@@ -197,9 +221,10 @@ function Select-VisibleArtifacts {
         })
 }
 
-# Resolves producers that actually completed this upload step in the selected
-# attempt. Failed or skipped upload steps cannot establish a newer artifact.
-function Get-ArtifactProducer {
+# Resolves one matching producer job before inspecting any of its steps. The
+# caller can distinguish an unavailable artifact from a confirmed terminal job
+# that never reached upload.
+function Get-ArtifactProducerState {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()] [array] $Jobs,
         [Parameter(Mandatory)] [string] $JobPrefix,
@@ -209,21 +234,42 @@ function Get-ArtifactProducer {
 
     $producers = @($Jobs | Where-Object {
             $marker = Get-ArtifactJobMarker -Job $_
-            $markerMatch = $marker.StartsWith($JobPrefix, [StringComparison]::Ordinal)
-            $identityMatch = [string]::IsNullOrEmpty($Identity) -or
-                $marker -ceq "$JobPrefix$Identity"
-            $uploadSuccess = @(
-                Get-ArtifactResponseProperty -Response $_ -Name 'steps' | Where-Object {
-                    (Get-ArtifactResponseProperty -Response $_ -Name 'name') -ceq $StepName -and
-                    (Get-ArtifactResponseProperty -Response $_ -Name 'conclusion') -ceq 'success'
-                }
-            ).Count -gt 0
-            $markerMatch -and $identityMatch -and $uploadSuccess
+            $marker.StartsWith($JobPrefix, [StringComparison]::Ordinal) -and
+                ([string]::IsNullOrEmpty($Identity) -or $marker -ceq "$JobPrefix$Identity")
         })
     if ($producers.Count -gt 1) {
         throw "Producer prefix '$JobPrefix' and identity '$Identity' matched more than one job."
     }
-    return $producers
+    if ($producers.Count -eq 0) {
+        return [pscustomobject]@{
+            Found = $false
+            Pending = $false
+            Terminal = $false
+            UploadSucceeded = $false
+            Job = $null
+        }
+    }
+
+    $job = $producers[0]
+    $uploadSucceeded = @(
+        Get-ArtifactResponseProperty -Response $job -Name 'steps' | Where-Object {
+            (Get-ArtifactResponseProperty -Response $_ -Name 'name') -ceq $StepName -and
+            (Get-ArtifactOptionalProperty -Response $_ -Name 'conclusion') -ceq 'success'
+        }
+    ).Count -gt 0
+    $status = [string] (Get-ArtifactResponseProperty -Response $job -Name 'status')
+    $conclusion = [string] (Get-ArtifactOptionalProperty -Response $job -Name 'conclusion')
+    $terminal = $status -ceq 'completed' -and $conclusion -cin @(
+        'success', 'failure', 'cancelled', 'skipped', 'timed_out',
+        'action_required', 'neutral'
+    )
+    return [pscustomobject]@{
+        Found = $true
+        Pending = -not $terminal
+        Terminal = $terminal
+        UploadSucceeded = $uploadSucceeded
+        Job = $job
+    }
 }
 
 # Verifies that the newest artifact for one family was created by or after its
@@ -249,6 +295,62 @@ function Test-ArtifactIsFresh {
         [Globalization.DateTimeStyles]::RoundtripKind
     )
     return $createdAt -ge $startedAt
+}
+
+# Checks only the archive redirect without consuming its payload. A missing
+# redirect is eventual visibility; permanent HTTP responses remain failures.
+function Test-ArtifactArchiveReady {
+    param(
+        [Parameter(Mandatory)] $Artifact,
+        [Parameter(Mandatory)] [hashtable] $Headers
+    )
+
+    if ([bool] (Get-ArtifactResponseProperty -Response $Artifact -Name 'expired')) {
+        throw "Artifact '$((Get-ArtifactResponseProperty -Response $Artifact -Name 'name'))' has expired."
+    }
+    $uri = [string] (Get-ArtifactResponseProperty -Response $Artifact -Name 'archive_download_url')
+    try {
+        $response = Invoke-WebRequest -Uri $uri -Headers $Headers -Method Head `
+            -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec $script:DefaultRequestTimeoutSeconds `
+            -ErrorAction Stop
+    }
+    catch {
+        $status = Get-ArtifactHttpStatusCode -ErrorRecord $_
+        # With MaximumRedirection disabled, PowerShell reports a valid 3xx as a
+        # statusless redirect-limit exception. Reaching that boundary proves the
+        # GitHub archive endpoint issued its download redirect.
+        if ($_.FullyQualifiedErrorId -like 'MaximumRedirectExceeded*' -or
+            $_.Exception.Message -like '*maximum redirection count has been exceeded*' -or
+            ($_.ErrorDetails -and
+                $_.ErrorDetails.Message -like '*maximum redirection count has been exceeded*')) {
+            return $true
+        }
+        if ($status -in @(200, 201, 202, 203, 204, 301, 302, 303, 307, 308)) { return $true }
+        if ($status -eq 404) { return $false }
+        if ((Test-ArtifactTransientFailure -ErrorRecord $_)) { throw }
+        throw
+    }
+
+    $status = [int] $response.StatusCode
+    if ($status -eq 404) { return $false }
+    if ($status -ge 200 -and $status -lt 400) { return $true }
+    throw [ArtifactVisibilityHttpException]::new($status)
+}
+
+# Proves every selected archive redirect before the official action transfers
+# the same IDs, so a listed-but-not-downloadable artifact remains retryable.
+function Test-ArtifactArchivesReady {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()] [array] $Artifacts,
+        [Parameter(Mandatory)] [hashtable] $Headers
+    )
+
+    foreach ($artifact in $Artifacts) {
+        if (-not (Test-ArtifactArchiveReady -Artifact $artifact -Headers $Headers)) {
+            return $false
+        }
+    }
+    return $true
 }
 
 # Waits for complete selector visibility before the official action downloads.
@@ -334,9 +436,14 @@ function Wait-ArtifactVisibility {
                 if ($ready -and $producerFields -eq 2) {
                     $jobs = @(Get-GitHubRunAttemptJobs -ApiUrl $ApiUrl -Repository $Repository `
                             -RunId $RunId -RunAttempt $RunAttempt -Headers $headers)
-                    $producer = Get-ArtifactProducer -Jobs $jobs -JobPrefix $ProducerJobPrefix `
+                    $state = Get-ArtifactProducerState -Jobs $jobs -JobPrefix $ProducerJobPrefix `
                         -StepName $ProducerStep
-                    $ready = Test-ArtifactIsFresh -Artifacts $selected -Producer $producer
+                    if ($state.Pending) {
+                        $ready = $false
+                    }
+                    elseif ($state.UploadSucceeded) {
+                        $ready = Test-ArtifactIsFresh -Artifacts $selected -Producer $state.Job
+                    }
                 }
             }
             else {
@@ -356,13 +463,23 @@ function Wait-ArtifactVisibility {
                             [string] (Get-ArtifactResponseProperty -Response $_ -Name 'name') `
                                 -clike "$familyPrefix*"
                         })
-                    $producer = Get-ArtifactProducer -Jobs $jobs -JobPrefix $ProducerJobPrefix `
+                        $state = Get-ArtifactProducerState -Jobs $jobs -JobPrefix $ProducerJobPrefix `
                         -StepName $ProducerStep -Identity $identity
-                    if (-not (Test-ArtifactIsFresh -Artifacts $family -Producer $producer)) {
+                        if ($state.Terminal -and -not $state.UploadSucceeded) {
+                            # A failed/skipped producer has no receipt to await. The
+                            # companion will classify its missing platform evidence.
+                            continue
+                        }
+                        $producer = if ($state.UploadSucceeded) { $state.Job } else { $null }
+                        if ($state.Pending -or
+                            -not (Test-ArtifactIsFresh -Artifacts $family -Producer $producer)) {
                         $ready = $false
                         break
                     }
                 }
+            }
+            if ($ready -and -not (Test-ArtifactArchivesReady -Artifacts $selected -Headers $headers)) {
+                $ready = $false
             }
             if ($ready) {
                 Write-Output "$description is visible to the official workflow-run downloader."

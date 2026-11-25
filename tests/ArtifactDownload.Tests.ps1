@@ -18,14 +18,19 @@ InModuleScope ArtifactVisibility {
                 id = 41
                 name = 'collection-windows-latest-1'
                 created_at = '2026-01-01T00:01:30Z'
+                expired = $false
+                archive_download_url = 'https://api.github.test/artifacts/41/zip'
             }
             $script:ubuntu = [pscustomobject]@{
                 id = 42
                 name = 'collection-ubuntu-latest-1'
                 created_at = '2026-01-01T00:01:30Z'
+                expired = $false
+                archive_download_url = 'https://api.github.test/artifacts/42/zip'
             }
             $script:reads = 0
             Mock Start-Sleep {}
+            Mock Invoke-WebRequest { [pscustomobject]@{ StatusCode = 302 } }
         }
 
         It 'waits for an artifact ID in the same paginated run inventory used by downloads' {
@@ -37,6 +42,8 @@ InModuleScope ArtifactVisibility {
                         [pscustomobject]@{
                             id = if ($script:reads -eq 1) { 99 } else { 41 }
                             name = 'unrelated'
+                            expired = $false
+                            archive_download_url = 'https://api.github.test/artifacts/redirect'
                         }
                     )
                 }
@@ -58,13 +65,18 @@ InModuleScope ArtifactVisibility {
                 if ($Uri -like '*page=1') {
                     [pscustomobject]@{
                         total_count = 2
-                        artifacts = @([pscustomobject]@{ id = 99; name = 'other' })
+                        artifacts = @([pscustomobject]@{
+                                id = 99
+                                name = 'other'
+                                expired = $false
+                                archive_download_url = 'https://api.github.test/artifacts/99/zip'
+                            })
                     }
                 }
                 else {
                     [pscustomobject]@{
                         total_count = 2
-                        artifacts = @([pscustomobject]@{ id = 41; name = 'wanted' })
+                        artifacts = @($script:windows)
                     }
                 }
             }
@@ -106,6 +118,8 @@ InModuleScope ArtifactVisibility {
                 @([pscustomobject]@{
                         id = 50
                         name = 'canary-fixture'
+                        expired = $false
+                        archive_download_url = 'https://api.github.test/artifacts/50/zip'
                         created_at = if ($script:reads -eq 1) {
                             '2026-01-01T00:00:30Z'
                         }
@@ -118,6 +132,8 @@ InModuleScope ArtifactVisibility {
                 @([pscustomobject]@{
                         name = 'benchmark / cbh-collect:action-canary-ubuntu-latest:ubuntu-latest'
                         started_at = '2026-01-01T00:02:00Z'
+                status = 'completed'
+                conclusion = 'success'
                         steps = @([pscustomobject]@{
                                 name = 'Upload fixture'
                                 conclusion = 'success'
@@ -165,6 +181,8 @@ InModuleScope ArtifactVisibility {
                         id = 43
                         name = 'collection-windows-latest-2'
                         created_at = '2026-01-01T00:02:30Z'
+                        expired = $false
+                        archive_download_url = 'https://api.github.test/artifacts/43/zip'
                     }
                     $script:ubuntu
                 )
@@ -174,6 +192,8 @@ InModuleScope ArtifactVisibility {
                     [pscustomobject]@{
                         name = 'caller / cbh-collect:project:windows-latest'
                         started_at = '2026-01-01T00:02:00Z'
+                        status = 'completed'
+                        conclusion = 'success'
                         steps = @([pscustomobject]@{
                                 name = 'Upload receipt'
                                 conclusion = 'success'
@@ -182,6 +202,8 @@ InModuleScope ArtifactVisibility {
                     [pscustomobject]@{
                         name = 'caller / cbh-collect:project:ubuntu-latest'
                         started_at = '2026-01-01T00:00:10Z'
+                        status = 'completed'
+                        conclusion = 'success'
                         steps = @([pscustomobject]@{
                                 name = 'Upload receipt'
                                 conclusion = 'success'
@@ -206,6 +228,8 @@ InModuleScope ArtifactVisibility {
                 @([pscustomobject]@{
                         name = 'caller / cbh-collect:project:windows-latest'
                         started_at = '2026-01-01T00:02:00Z'
+                        status = 'completed'
+                        conclusion = 'failure'
                         steps = @([pscustomobject]@{
                                 name = 'Upload receipt'
                                 conclusion = 'failure'
@@ -218,6 +242,118 @@ InModuleScope ArtifactVisibility {
                 -ProducerJobPrefix 'cbh-collect:project:' -ProducerStep 'Upload receipt' `
                 -ArtifactNamePrefix 'collection-' -ArtifactNameIncludesJobSuffix `
                 -ExpectedIdentities 'windows-latest' -MaximumAttempts 1
+        }
+
+        It 'allows a confirmed failed platform while retaining successful partial evidence' {
+            Mock Get-GitHubRunArtifacts { @($script:ubuntu) }
+            Mock Get-GitHubRunAttemptJobs {
+                @(
+                    [pscustomobject]@{
+                        name = 'caller / cbh-collect:project:windows-latest'
+                        started_at = '2026-01-01T00:00:10Z'
+                        status = 'completed'
+                        conclusion = 'failure'
+                        steps = @([pscustomobject]@{
+                                name = 'Upload receipt'
+                                conclusion = 'skipped'
+                            })
+                    }
+                    [pscustomobject]@{
+                        name = 'caller / cbh-collect:project:ubuntu-latest'
+                        started_at = '2026-01-01T00:00:10Z'
+                        status = 'completed'
+                        conclusion = 'success'
+                        steps = @([pscustomobject]@{
+                                name = 'Upload receipt'
+                                conclusion = 'success'
+                            })
+                    }
+                )
+            }
+
+            Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
+                -RunId 7 -RunAttempt 1 -GitHubToken 'token' -Pattern 'collection-*' `
+                -ProducerJobPrefix 'cbh-collect:project:' -ProducerStep 'Upload receipt' `
+                -ArtifactNamePrefix 'collection-' -ArtifactNameIncludesJobSuffix `
+                -ExpectedIdentities 'windows-latest,ubuntu-latest' -MaximumAttempts 1
+        }
+
+        It 'does not inspect steps belonging to unrelated jobs' {
+            Mock Get-GitHubRunArtifacts { @($script:windows) }
+            Mock Get-GitHubRunAttemptJobs {
+                @(
+                    [pscustomobject]@{
+                        name = 'caller / unrelated-workflow'
+                        status = 'in_progress'
+                        steps = @([pscustomobject]@{ name = 'Upload receipt' })
+                    }
+                    [pscustomobject]@{
+                        name = 'caller / cbh-collect:project:windows-latest'
+                        started_at = '2026-01-01T00:00:10Z'
+                        status = 'completed'
+                        conclusion = 'success'
+                        steps = @([pscustomobject]@{
+                                name = 'Upload receipt'
+                                conclusion = 'success'
+                            })
+                    }
+                )
+            }
+
+            {
+                Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
+                    -RunId 7 -RunAttempt 1 -GitHubToken 'token' -Pattern 'collection-*' `
+                    -ProducerJobPrefix 'cbh-collect:project:' -ProducerStep 'Upload receipt' `
+                    -ArtifactNamePrefix 'collection-' -ArtifactNameIncludesJobSuffix `
+                    -ExpectedIdentities 'windows-latest' -MaximumAttempts 1
+            } | Should -Not -Throw
+        }
+
+        It 'retries a listed artifact until its archive redirect is ready' {
+            $script:archiveReads = 0
+            Mock Get-GitHubRunArtifacts { @($script:windows) }
+            Mock Invoke-WebRequest {
+                $script:archiveReads++
+                [pscustomobject]@{
+                    StatusCode = if ($script:archiveReads -eq 1) { 404 } else { 302 }
+                }
+            }
+
+            Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
+                -RunId 7 -RunAttempt 1 -GitHubToken 'token' -ArtifactIds '41' `
+                -MaximumAttempts 2 -RetryDelaySeconds 0
+
+            Should -Invoke Invoke-WebRequest -Times 2 -Exactly -ParameterFilter {
+                $Uri -ceq $script:windows.archive_download_url -and $Method -ceq 'Head' -and
+                    $MaximumRedirection -eq 0 -and $TimeoutSec -eq 30
+            }
+            Should -Invoke Start-Sleep -Times 1 -Exactly
+        }
+
+        It 'propagates a permanent archive readiness error without retry' {
+            Mock Get-GitHubRunArtifacts { @($script:windows) }
+            Mock Invoke-WebRequest { [pscustomobject]@{ StatusCode = 403 } }
+
+            {
+                Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
+                    -RunId 7 -RunAttempt 1 -GitHubToken 'token' -ArtifactIds '41' `
+                    -MaximumAttempts 3 -RetryDelaySeconds 0
+            } | Should -Throw '*HTTP 403*'
+
+            Should -Invoke Start-Sleep -Times 0
+        }
+
+        It 'accepts the PowerShell redirect-limit exception as archive readiness' {
+            Mock Get-GitHubRunArtifacts { @($script:windows) }
+            Mock Invoke-WebRequest {
+                throw 'The maximum redirection count has been exceeded. To increase the number of redirections allowed, supply a higher value.'
+            }
+
+            {
+                Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
+                    -RunId 7 -RunAttempt 1 -GitHubToken 'token' -ArtifactIds '41' `
+                    -MaximumAttempts 1
+            } | Should -Not -Throw
         }
 
         It 'fails clearly after the bounded visibility budget' {
