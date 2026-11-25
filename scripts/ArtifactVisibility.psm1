@@ -9,16 +9,7 @@ $ErrorActionPreference = 'Stop'
 $script:DefaultMaximumAttempts = 12
 $script:DefaultRetryDelaySeconds = 5
 $script:DefaultRequestTimeoutSeconds = 30
-
-# Represents a known HTTP response without allowing an archive readiness check
-# to hide a permanent status inside a generic script error.
-class ArtifactVisibilityHttpException : System.Exception {
-    [object] $Response
-
-    ArtifactVisibilityHttpException([int] $StatusCode) : base("HTTP $StatusCode") {
-        $this.Response = [pscustomobject]@{ StatusCode = $StatusCode }
-    }
-}
+$script:TransientStatuses = @(404, 408, 429, 500, 502, 503, 504)
 
 # Extracts an HTTP status from real and mocked REST exceptions.
 function Get-ArtifactHttpStatusCode {
@@ -38,10 +29,9 @@ function Test-ArtifactTransientFailure {
 
     $status = Get-ArtifactHttpStatusCode -ErrorRecord $ErrorRecord
     if ($null -ne $status) {
-        return $status -in @(408, 429) -or $status -ge 500
+        return $status -in $script:TransientStatuses
     }
-    return $ErrorRecord.Exception -is [System.TimeoutException] -or
-        $ErrorRecord.Exception.Message -match '(?i)\b(?:timed? out|timeout|temporarily unavailable)\b'
+    return $false
 }
 
 # Reads required response data and preserves valid empty inventories.
@@ -121,7 +111,13 @@ function Get-GitHubRunArtifacts {
     $page = 1
     while ($true) {
         $uri = "$($ApiUrl.TrimEnd('/'))/repos/$Repository/actions/runs/$RunId/artifacts?per_page=100&page=$page"
-        $response = Invoke-ArtifactRestMethod -Uri $uri -Headers $Headers
+        try {
+            $response = Invoke-ArtifactRestMethod -Uri $uri -Headers $Headers
+        }
+        catch {
+            if ((Get-ArtifactHttpStatusCode -ErrorRecord $_) -eq 404) { return @() }
+            throw
+        }
         if ($null -eq $expected) {
             $expected = [int] (Get-ArtifactResponseProperty -Response $response -Name 'total_count')
         }
@@ -208,17 +204,22 @@ function Select-VisibleArtifacts {
         return @($selected)
     }
     if ($Selector -ceq 'name') {
-        $selected = @($Artifacts | Where-Object {
-                (Get-ArtifactResponseProperty -Response $_ -Name 'name') -ceq $Name
-            })
-        if ($selected.Count -gt 1) {
-            throw "Artifact name '$Name' matched more than one artifact in the workflow run."
-        }
-        return @($selected)
+        return @(
+            $Artifacts |
+                Where-Object { (Get-ArtifactResponseProperty -Response $_ -Name 'name') -ceq $Name } |
+                Sort-Object { [long] (Get-ArtifactResponseProperty -Response $_ -Name 'id') } -Descending |
+                Select-Object -First 1
+        )
     }
-    return @($Artifacts | Where-Object {
-            (Get-ArtifactResponseProperty -Response $_ -Name 'name') -clike $Pattern
-        })
+    return @(
+        $Artifacts |
+            Where-Object { (Get-ArtifactResponseProperty -Response $_ -Name 'name') -clike $Pattern } |
+            Sort-Object { [long] (Get-ArtifactResponseProperty -Response $_ -Name 'id') } -Descending |
+            Group-Object -CaseSensitive {
+                Get-ArtifactResponseProperty -Response $_ -Name 'name'
+            } |
+            ForEach-Object { $_.Group | Select-Object -First 1 }
+    )
 }
 
 # Resolves one matching producer job before inspecting any of its steps. The
@@ -243,7 +244,7 @@ function Get-ArtifactProducerState {
     if ($producers.Count -eq 0) {
         return [pscustomobject]@{
             Found = $false
-            Pending = $false
+            Pending = $true
             Terminal = $false
             UploadSucceeded = $false
             Job = $null
@@ -295,62 +296,6 @@ function Test-ArtifactIsFresh {
         [Globalization.DateTimeStyles]::RoundtripKind
     )
     return $createdAt -ge $startedAt
-}
-
-# Checks only the archive redirect without consuming its payload. A missing
-# redirect is eventual visibility; permanent HTTP responses remain failures.
-function Test-ArtifactArchiveReady {
-    param(
-        [Parameter(Mandatory)] $Artifact,
-        [Parameter(Mandatory)] [hashtable] $Headers
-    )
-
-    if ([bool] (Get-ArtifactResponseProperty -Response $Artifact -Name 'expired')) {
-        throw "Artifact '$((Get-ArtifactResponseProperty -Response $Artifact -Name 'name'))' has expired."
-    }
-    $uri = [string] (Get-ArtifactResponseProperty -Response $Artifact -Name 'archive_download_url')
-    try {
-        $response = Invoke-WebRequest -Uri $uri -Headers $Headers -Method Head `
-            -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec $script:DefaultRequestTimeoutSeconds `
-            -ErrorAction Stop
-    }
-    catch {
-        $status = Get-ArtifactHttpStatusCode -ErrorRecord $_
-        # With MaximumRedirection disabled, PowerShell reports a valid 3xx as a
-        # statusless redirect-limit exception. Reaching that boundary proves the
-        # GitHub archive endpoint issued its download redirect.
-        if ($_.FullyQualifiedErrorId -like 'MaximumRedirectExceeded*' -or
-            $_.Exception.Message -like '*maximum redirection count has been exceeded*' -or
-            ($_.ErrorDetails -and
-                $_.ErrorDetails.Message -like '*maximum redirection count has been exceeded*')) {
-            return $true
-        }
-        if ($status -in @(200, 201, 202, 203, 204, 301, 302, 303, 307, 308)) { return $true }
-        if ($status -eq 404) { return $false }
-        if ((Test-ArtifactTransientFailure -ErrorRecord $_)) { throw }
-        throw
-    }
-
-    $status = [int] $response.StatusCode
-    if ($status -eq 404) { return $false }
-    if ($status -ge 200 -and $status -lt 400) { return $true }
-    throw [ArtifactVisibilityHttpException]::new($status)
-}
-
-# Proves every selected archive redirect before the official action transfers
-# the same IDs, so a listed-but-not-downloadable artifact remains retryable.
-function Test-ArtifactArchivesReady {
-    param(
-        [Parameter(Mandatory)][AllowEmptyCollection()] [array] $Artifacts,
-        [Parameter(Mandatory)] [hashtable] $Headers
-    )
-
-    foreach ($artifact in $Artifacts) {
-        if (-not (Test-ArtifactArchiveReady -Artifact $artifact -Headers $Headers)) {
-            return $false
-        }
-    }
-    return $true
 }
 
 # Waits for complete selector visibility before the official action downloads.
@@ -463,26 +408,30 @@ function Wait-ArtifactVisibility {
                             [string] (Get-ArtifactResponseProperty -Response $_ -Name 'name') `
                                 -clike "$familyPrefix*"
                         })
-                        $state = Get-ArtifactProducerState -Jobs $jobs -JobPrefix $ProducerJobPrefix `
+                    $state = Get-ArtifactProducerState -Jobs $jobs -JobPrefix $ProducerJobPrefix `
                         -StepName $ProducerStep -Identity $identity
-                        if ($state.Terminal -and -not $state.UploadSucceeded) {
-                            # A failed/skipped producer has no receipt to await. The
-                            # companion will classify its missing platform evidence.
-                            continue
-                        }
-                        $producer = if ($state.UploadSucceeded) { $state.Job } else { $null }
-                        if ($state.Pending -or
-                            -not (Test-ArtifactIsFresh -Artifacts $family -Producer $producer)) {
+                    if ($state.Terminal -and -not $state.UploadSucceeded) {
+                        # A failed/skipped producer has no receipt to await. The
+                        # companion will classify its missing platform evidence.
+                        continue
+                    }
+                    $producer = if ($state.UploadSucceeded) { $state.Job } else { $null }
+                    if ($state.Pending -or
+                        -not (Test-ArtifactIsFresh -Artifacts $family -Producer $producer)) {
                         $ready = $false
                         break
                     }
                 }
             }
-            if ($ready -and -not (Test-ArtifactArchivesReady -Artifacts $selected -Headers $headers)) {
-                $ready = $false
-            }
             if ($ready) {
-                Write-Output "$description is visible to the official workflow-run downloader."
+                Write-Information "$description is visible to the official workflow-run downloader." `
+                    -InformationAction Continue
+                foreach ($artifact in $selected) {
+                    [pscustomobject]@{
+                        Id = [long] (Get-ArtifactResponseProperty -Response $artifact -Name 'id')
+                        Name = [string] (Get-ArtifactResponseProperty -Response $artifact -Name 'name')
+                    }
+                }
                 return
             }
         }
@@ -491,7 +440,8 @@ function Wait-ArtifactVisibility {
         }
 
         if ($attempt -lt $MaximumAttempts) {
-            Write-Output "$description is not completely visible yet; retrying."
+            Write-Information "$description is not completely visible yet; retrying." `
+                -InformationAction Continue
             Start-Sleep -Seconds $RetryDelaySeconds
         }
     }
@@ -500,4 +450,170 @@ function Wait-ArtifactVisibility {
         "after $MaximumAttempts attempts."
 }
 
-Export-ModuleMember -Function Wait-ArtifactVisibility
+# Reads only the REST archive redirect status. The workflow credential reaches
+# GitHub, but automatic redirection is disabled so it never reaches the signed URL.
+function Get-ArtifactArchiveStatus {
+    param(
+        [Parameter(Mandatory)] [uri] $Uri,
+        [Parameter(Mandatory)] [hashtable] $Headers
+    )
+
+    $handler = [Net.Http.HttpClientHandler]::new()
+    $handler.AllowAutoRedirect = $false
+    $client = [Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds($script:DefaultRequestTimeoutSeconds)
+    try {
+        $client.DefaultRequestHeaders.UserAgent.ParseAdd('cargo-bench-history-action')
+        foreach ($header in $Headers.GetEnumerator()) {
+            $client.DefaultRequestHeaders.Add($header.Key, $header.Value)
+        }
+        $response = $client.GetAsync($Uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).
+            GetAwaiter().GetResult()
+        try {
+            if ([int] $response.StatusCode -eq 302 -and -not $response.Headers.Location) {
+                throw 'GitHub returned an archive redirect without a Location.'
+            }
+            return [int] $response.StatusCode
+        }
+        finally { $response.Dispose() }
+    }
+    finally { $client.Dispose() }
+}
+
+# Waits for credentialed REST archive access after a transfer failure. A
+# persistent single-ID 404 returns false so the official same-run client can
+# retry without the narrower REST view; multi-ID retries never downgrade.
+function Wait-ArtifactArchiveRedirect {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $ApiUrl,
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [long[]] $ArtifactIds,
+        [Parameter(Mandatory)] [string] $GitHubToken
+    )
+
+    $headers = Get-ArtifactHeaders -GitHubToken $GitHubToken
+    foreach ($id in $ArtifactIds) {
+        $uri = "$($ApiUrl.TrimEnd('/'))/repos/$Repository/actions/artifacts/$id/zip"
+        for ($attempt = 1; $attempt -le $script:DefaultMaximumAttempts; $attempt++) {
+            $status = Get-ArtifactArchiveStatus -Uri $uri -Headers $headers
+            if ($status -eq 302) { break }
+            $detail = "Archive GET for artifact $id in $Repository returned HTTP $status " +
+                "with the workflow token (attempt $attempt/$script:DefaultMaximumAttempts)."
+            if ($status -eq 404 -and $attempt -eq $script:DefaultMaximumAttempts -and
+                $ArtifactIds.Count -eq 1) {
+                Write-Warning "$detail Retrying the transfer with the same-run artifact service instead."
+                return $false
+            }
+            if ($status -notin $script:TransientStatuses -or
+                $attempt -eq $script:DefaultMaximumAttempts) {
+                throw "$detail Check this job's artifact access; a 404 does not distinguish delay from denial."
+            }
+            Write-Warning "$detail Retrying in $script:DefaultRetryDelaySeconds seconds."
+            Start-Sleep -Seconds $script:DefaultRetryDelaySeconds
+        }
+    }
+    return $true
+}
+
+# Validates that a frozen multi-artifact selection transferred completely.
+# Single-artifact transfers rely on the official action's required success exit.
+function Assert-ArtifactTransferComplete {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [object[]] $Selection,
+        [switch] $MergeMultiple
+    )
+
+    $entries = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop)
+    if ($entries.Count -eq 0) {
+        throw 'Incomplete artifact transfer: staging directory is empty.'
+    }
+    if ($Selection.Count -eq 1) { return }
+    if ($MergeMultiple) {
+        throw 'Cannot prove completeness for multiple merged artifact IDs.'
+    }
+
+    $missing = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($item in $Selection) {
+        if (-not $missing.Add([string] $item.Name)) {
+            throw "Cannot distinguish multiple selected artifact IDs named '$($item.Name)'."
+        }
+    }
+    foreach ($entry in $entries) {
+        if (-not $entry.PSIsContainer -or -not $missing.Remove($entry.Name)) {
+            throw "Incomplete artifact transfer: unexpected staged entry '$($entry.Name)'."
+        }
+    }
+    if ($missing.Count) {
+        throw "Incomplete artifact transfer: missing $($missing -join ', ')."
+    }
+}
+
+# Atomically exposes a fully verified transfer while retaining unrelated existing
+# destination entries, such as backfill preparation evidence.
+function Publish-ArtifactTransfer {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [object[]] $Selection,
+        [Parameter(Mandatory)] [string] $Destination,
+        [switch] $MergeMultiple
+    )
+
+    Assert-ArtifactTransferComplete -Path $Path -Selection $Selection -MergeMultiple:$MergeMultiple
+    $resolvedDestination = [IO.Path]::GetFullPath($Destination)
+    $parent = [IO.Path]::GetDirectoryName($resolvedDestination)
+    $null = New-Item -ItemType Directory -Path $parent -Force
+    if ((Test-Path -LiteralPath $resolvedDestination) -and
+        -not (Test-Path -LiteralPath $resolvedDestination -PathType Container)) {
+        throw "Artifact destination is not a directory: $resolvedDestination"
+    }
+    $stagedDestination = Join-Path $parent ".cbh-artifact-publish-$([guid]::NewGuid().ToString('N'))"
+    $backup = Join-Path $parent ".cbh-artifact-backup-$([guid]::NewGuid().ToString('N'))"
+    $null = New-Item -ItemType Directory -Path $stagedDestination
+    $published = $false
+    $destinationMoved = $false
+    try {
+        if (Test-Path -LiteralPath $resolvedDestination -PathType Container) {
+            foreach ($entry in Get-ChildItem -LiteralPath $resolvedDestination -Force) {
+                Copy-Item -LiteralPath $entry.FullName `
+                    -Destination (Join-Path $stagedDestination $entry.Name) -Recurse -Force
+            }
+        }
+        foreach ($entry in Get-ChildItem -LiteralPath $Path -Force) {
+            $target = Join-Path $stagedDestination $entry.Name
+            if (Test-Path -LiteralPath $target) {
+                throw "Downloaded artifact entry collides with existing destination '$($entry.Name)'."
+            }
+            Move-Item -LiteralPath $entry.FullName -Destination $target
+        }
+
+        if (Test-Path -LiteralPath $resolvedDestination) {
+            Move-Item -LiteralPath $resolvedDestination -Destination $backup
+            $destinationMoved = $true
+        }
+        Move-Item -LiteralPath $stagedDestination -Destination $resolvedDestination
+        $published = $true
+    }
+    catch {
+        if ($destinationMoved -and -not (Test-Path -LiteralPath $resolvedDestination) -and
+            (Test-Path -LiteralPath $backup)) {
+            Move-Item -LiteralPath $backup -Destination $resolvedDestination
+            $destinationMoved = $false
+        }
+        throw
+    }
+    finally {
+        if (Test-Path -LiteralPath $stagedDestination) {
+            Remove-Item -LiteralPath $stagedDestination -Recurse -Force
+        }
+        if ($published -and (Test-Path -LiteralPath $backup)) {
+            Remove-Item -LiteralPath $backup -Recurse -Force
+        }
+    }
+}
+
+Export-ModuleMember -Function Wait-ArtifactVisibility, Wait-ArtifactArchiveRedirect,
+    Assert-ArtifactTransferComplete, Publish-ArtifactTransfer

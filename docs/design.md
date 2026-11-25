@@ -119,10 +119,13 @@ retains an earlier measurement. A standalone store analysis of the same commit
 can therefore differ from the workflow report. Concurrent store writes cannot
 replace the report's selected current values.
 
-Same-run artifact downloads tolerate short propagation delays after a successful
-upload. ID-, name- and pattern-based downloads use a bounded visibility retry;
-authentication, authorization, malformed responses and other permanent failures
-stop immediately. A clear download failure remains after the retry budget ends.
+Same-run artifact downloads tolerate short propagation and transfer visibility
+delays after a successful upload. ID-, name- and pattern-based downloads freeze
+complete authenticated evidence, use isolated transfer stages and expose only a
+verified complete result. A failed transfer can retry with the workflow's own
+credentials after bounded archive-redirect readiness checks. Authentication,
+authorization, malformed responses and other permanent failures stop
+immediately. A clear download failure remains after the retry budget ends.
 
 Supported collection runners are x64 Linux, x64 Windows and Apple Silicon macOS,
 with Linux and Windows selected by default. Callers can include `macos-latest`

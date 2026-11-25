@@ -30,7 +30,6 @@ InModuleScope ArtifactVisibility {
             }
             $script:reads = 0
             Mock Start-Sleep {}
-            Mock Invoke-WebRequest { [pscustomobject]@{ StatusCode = 302 } }
         }
 
         It 'waits for an artifact ID in the same paginated run inventory used by downloads' {
@@ -41,7 +40,7 @@ InModuleScope ArtifactVisibility {
                     artifacts = @(
                         [pscustomobject]@{
                             id = if ($script:reads -eq 1) { 99 } else { 41 }
-                            name = 'unrelated'
+                            name = 'collection-windows-latest-1'
                             expired = $false
                             archive_download_url = 'https://api.github.test/artifacts/redirect'
                         }
@@ -49,10 +48,13 @@ InModuleScope ArtifactVisibility {
                 }
             }
 
-            Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
-                -RunId 7 -RunAttempt 2 -GitHubToken 'token' -ArtifactIds '41' `
-                -MaximumAttempts 2 -RetryDelaySeconds 0
+            $selection = @(Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' `
+                    -Repository 'owner/repository' -RunId 7 -RunAttempt 2 `
+                    -GitHubToken 'token' -ArtifactIds '41' `
+                    -MaximumAttempts 2 -RetryDelaySeconds 0)
 
+            $selection.Id | Should -Be @(41)
+            $selection.Name | Should -Be @('collection-windows-latest-1')
             Should -Invoke Invoke-RestMethod -Times 2 -Exactly -ParameterFilter {
                 $Uri -ceq 'https://api.github.test/repos/owner/repository/actions/runs/7/artifacts?per_page=100&page=1' -and
                     $Headers.Authorization -ceq 'Bearer token' -and $TimeoutSec -eq 30
@@ -157,7 +159,30 @@ InModuleScope ArtifactVisibility {
                 if ($script:reads -eq 2) { return @() }
                 return @($script:windows, $script:ubuntu)
             }
-            Mock Get-GitHubRunAttemptJobs { @() }
+            Mock Get-GitHubRunAttemptJobs {
+                @(
+                    [pscustomobject]@{
+                        name = 'caller / cbh-collect:project:windows-latest'
+                        started_at = '2026-01-01T00:00:10Z'
+                        status = 'completed'
+                        conclusion = 'success'
+                        steps = @([pscustomobject]@{
+                                name = 'Upload receipt'
+                                conclusion = 'success'
+                            })
+                    }
+                    [pscustomobject]@{
+                        name = 'caller / cbh-collect:project:ubuntu-latest'
+                        started_at = '2026-01-01T00:00:10Z'
+                        status = 'completed'
+                        conclusion = 'success'
+                        steps = @([pscustomobject]@{
+                                name = 'Upload receipt'
+                                conclusion = 'success'
+                            })
+                    }
+                )
+            }
 
             Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
                 -RunId 7 -RunAttempt 2 -GitHubToken 'token' -Pattern 'collection-*' `
@@ -309,51 +334,90 @@ InModuleScope ArtifactVisibility {
             } | Should -Not -Throw
         }
 
-        It 'retries a listed artifact until its archive redirect is ready' {
+        It 'retries a failed transfer with the workflow credential until archive access is ready' {
             $script:archiveReads = 0
-            Mock Get-GitHubRunArtifacts { @($script:windows) }
-            Mock Invoke-WebRequest {
+            Mock Get-ArtifactArchiveStatus {
                 $script:archiveReads++
-                [pscustomobject]@{
-                    StatusCode = if ($script:archiveReads -eq 1) { 404 } else { 302 }
-                }
+                if ($Uri -like '*/42/zip' -and $script:archiveReads -eq 2) { return 404 }
+                return 302
             }
 
-            Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
-                -RunId 7 -RunAttempt 1 -GitHubToken 'token' -ArtifactIds '41' `
-                -MaximumAttempts 2 -RetryDelaySeconds 0
+            Wait-ArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+                -Repository 'owner/repository' -GitHubToken 'job-token' `
+                -ArtifactIds 41,42 | Should -BeTrue
 
-            Should -Invoke Invoke-WebRequest -Times 2 -Exactly -ParameterFilter {
-                $Uri -ceq $script:windows.archive_download_url -and $Method -ceq 'Head' -and
-                    $MaximumRedirection -eq 0 -and $TimeoutSec -eq 30
+            Should -Invoke Get-ArtifactArchiveStatus -Times 1 -Exactly -ParameterFilter {
+                $Uri -ceq 'https://api.github.test/repos/owner/repository/actions/artifacts/41/zip' -and
+                    $Headers.Authorization -ceq 'Bearer job-token'
+            }
+            Should -Invoke Get-ArtifactArchiveStatus -Times 2 -Exactly -ParameterFilter {
+                $Uri -ceq 'https://api.github.test/repos/owner/repository/actions/artifacts/42/zip'
             }
             Should -Invoke Start-Sleep -Times 1 -Exactly
         }
 
-        It 'propagates a permanent archive readiness error without retry' {
-            Mock Get-GitHubRunArtifacts { @($script:windows) }
-            Mock Invoke-WebRequest { [pscustomobject]@{ StatusCode = 403 } }
+        It 'propagates a permanent archive status without retry' -ForEach @(
+            @{ StatusCode = 401 }
+            @{ StatusCode = 403 }
+            @{ StatusCode = 410 }
+        ) {
+            Mock Get-ArtifactArchiveStatus { $StatusCode }
 
             {
-                Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
-                    -RunId 7 -RunAttempt 1 -GitHubToken 'token' -ArtifactIds '41' `
-                    -MaximumAttempts 3 -RetryDelaySeconds 0
-            } | Should -Throw '*HTTP 403*'
+                Wait-ArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+                    -Repository 'owner/repository' -GitHubToken 'job-token' -ArtifactIds 41
+            } | Should -Throw "*HTTP $StatusCode*attempt 1/*"
 
             Should -Invoke Start-Sleep -Times 0
         }
 
-        It 'accepts the PowerShell redirect-limit exception as archive readiness' {
-            Mock Get-GitHubRunArtifacts { @($script:windows) }
-            Mock Invoke-WebRequest {
-                throw 'The maximum redirection count has been exceeded. To increase the number of redirections allowed, supply a higher value.'
-            }
+        It 'falls back after persistent REST 404 for one immutable artifact ID' {
+            Mock Get-ArtifactArchiveStatus { 404 }
+
+            Wait-ArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+                -Repository 'owner/repository' -GitHubToken 'job-token' -ArtifactIds 41 |
+                Should -BeFalse
+
+            Should -Invoke Get-ArtifactArchiveStatus -Times 12 -Exactly
+            Should -Invoke Start-Sleep -Times 11 -Exactly -ParameterFilter { $Seconds -eq 5 }
+        }
+
+        It 'never accepts persistent REST 404 for an incomplete multi-ID transfer' {
+            Mock Get-ArtifactArchiveStatus { 404 }
 
             {
-                Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
-                    -RunId 7 -RunAttempt 1 -GitHubToken 'token' -ArtifactIds '41' `
-                    -MaximumAttempts 1
-            } | Should -Not -Throw
+                Wait-ArtifactArchiveRedirect -ApiUrl 'https://api.github.test' `
+                    -Repository 'owner/repository' -GitHubToken 'job-token' -ArtifactIds 41,42
+            } | Should -Throw '*artifact 41*HTTP 404*attempt 12/12*'
+        }
+
+        It 'rejects incomplete multi-artifact staging and publishes only a complete set' {
+            $selection = @(
+                [pscustomobject]@{ Id = 41; Name = $script:windows.name }
+                [pscustomobject]@{ Id = 42; Name = $script:ubuntu.name }
+            )
+            $stage = Join-Path $TestDrive 'stage'
+            $destination = Join-Path $TestDrive 'destination'
+            $null = New-Item -ItemType Directory -Path (Join-Path $stage $script:windows.name) -Force
+            $null = New-Item -ItemType Directory -Path $destination -Force
+            'preparation' | Set-Content -LiteralPath (Join-Path $destination 'preparation.json')
+
+            {
+                Assert-ArtifactTransferComplete -Path $stage -Selection $selection
+            } | Should -Throw "*missing*$($script:ubuntu.name)*"
+
+            {
+                Publish-ArtifactTransfer -Path $stage -Selection $selection -Destination $destination
+            } | Should -Throw "*missing*$($script:ubuntu.name)*"
+            Test-Path -LiteralPath (Join-Path $destination 'preparation.json') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $destination $script:windows.name) | Should -BeFalse
+
+            $null = New-Item -ItemType Directory -Path (Join-Path $stage $script:ubuntu.name) -Force
+            Publish-ArtifactTransfer -Path $stage -Selection $selection -Destination $destination
+
+            Test-Path -LiteralPath (Join-Path $destination 'preparation.json') | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $destination $script:windows.name) | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path $destination $script:ubuntu.name) | Should -BeTrue
         }
 
         It 'fails clearly after the bounded visibility budget' {
@@ -368,10 +432,26 @@ InModuleScope ArtifactVisibility {
             Should -Invoke Start-Sleep -Times 2 -Exactly
         }
 
+        It 'uses the agreed twelve-attempt and five-second default budget' {
+            Mock Get-GitHubRunArtifacts { @() }
+
+            {
+                Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
+                    -RunId 7 -RunAttempt 2 -GitHubToken 'token' -ArtifactIds '41'
+            } | Should -Throw '*12 attempts*'
+
+            Should -Invoke Get-GitHubRunArtifacts -Times 12 -Exactly
+            Should -Invoke Start-Sleep -Times 11 -Exactly -ParameterFilter { $Seconds -eq 5 }
+        }
+
         It 'retries recognized transient HTTP status <StatusCode>' -ForEach @(
+            @{ StatusCode = 404 }
             @{ StatusCode = 408 }
             @{ StatusCode = 429 }
+            @{ StatusCode = 500 }
+            @{ StatusCode = 502 }
             @{ StatusCode = 503 }
+            @{ StatusCode = 504 }
         ) {
             Mock Get-GitHubRunArtifacts {
                 if (++$script:reads -eq 1) {
@@ -390,7 +470,6 @@ InModuleScope ArtifactVisibility {
         It 'propagates permanent HTTP status <StatusCode> without retry' -ForEach @(
             @{ StatusCode = 401 }
             @{ StatusCode = 403 }
-            @{ StatusCode = 404 }
             @{ StatusCode = 410 }
         ) {
             Mock Get-GitHubRunArtifacts {
@@ -406,7 +485,7 @@ InModuleScope ArtifactVisibility {
             Should -Invoke Start-Sleep -Times 0
         }
 
-        It 'retries a timeout but propagates an ordinary statusless transport error' {
+        It 'propagates statusless timeout and transport errors without retry' {
             Mock Get-GitHubRunArtifacts {
                 throw [System.TimeoutException]::new('request timed out')
             }
@@ -414,8 +493,8 @@ InModuleScope ArtifactVisibility {
                 Wait-ArtifactVisibility -ApiUrl 'https://api.github.test' -Repository 'owner/repository' `
                     -RunId 7 -RunAttempt 2 -GitHubToken 'token' -ArtifactIds '41' `
                     -MaximumAttempts 2 -RetryDelaySeconds 0
-            } | Should -Throw '*after 2 attempts*'
-            Should -Invoke Start-Sleep -Times 1 -Exactly
+            } | Should -Throw '*request timed out*'
+            Should -Invoke Start-Sleep -Times 0
 
             Mock Get-GitHubRunArtifacts {
                 throw [System.IO.IOException]::new('connection reset')
