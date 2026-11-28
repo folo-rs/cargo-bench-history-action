@@ -151,7 +151,7 @@ override; unset or `false` preserves ordinary published-installation caching.
 ## Reusable workflow orchestration
 
 `history.yml`, `pr.yml` and `backfill.yml` use `$/` self references to run this
-repository's root action and internal `workflow-tools` composite at the called workflow's exact commit.
+repository's root action and internal composites at the called workflow's exact commit.
 The caller's checkout cannot select that implementation. This requires GitHub.com
 runner 2.336.0 or newer; actionlint's unsupported self/queue diagnostics have exact,
 path-scoped compatibility exceptions.
@@ -162,6 +162,41 @@ holds the frozen measurement head. Its basename matches the repository name to r
 directory-derived project identity. The PR's frozen base can be fetched from the
 invocation checkout locally, without a persisted Git credential or another network
 authentication path.
+
+The `artifact-download` composite gates every same-run handoff on the
+authenticated GitHub REST artifact inventory and freezes the selected IDs and
+names before transfer. The pinned official download action first extracts into an
+isolated directory; the adapter captures transfer failure and validates the
+complete frozen set. A failed or incomplete transfer then probes the archive
+redirects with the workflow token, within the same bounded retry budget and
+per-request timeout used for metadata. At least one transient archive status must precede the redirect to classify an
+official-action failure as visibility related. A completeness failure may use
+an already-ready redirect because the official action reported success while
+omitting a selected artifact. A redirect that was ready on the first probe
+leaves other transfer failures visible instead of repeating a possible
+extraction failure.
+A classified failure permits one retry with that token into a second isolated
+directory. Persistent single-ID REST
+404s permit one same-run-service fallback; incomplete multi-ID transfers remain
+errors. Only a verified transfer is moved atomically into the destination while
+retaining unrelated existing evidence.
+
+ID-, exact-name and wildcard-pattern selectors share the visibility retry
+budget. Archive probes perform only a non-body GET with redirects disabled; the
+official action still owns archive transfer, extraction and selector layout.
+Pattern consumers require one artifact family for each declared producer
+identity. Reusable-workflow names normalize to their final job component.
+For every identity, the newest matching artifact must be at least as new as that
+producer's retained start time when the selected attempt reports a successful
+upload step. Untouched inherited jobs retain their original timestamps and remain
+eligible; rerun producers cannot reuse an older artifact. Duplicate pattern names
+never supply a missing identity. A confirmed terminal producer that never reached
+upload contributes no required artifact and remains subject to companion failure
+classification. Benchmark receipt and lifecycle decisions remain
+owned by the companion. Retries cover recognized 404, throttling and service
+statuses; authentication, authorization, deterministic expiry, validation and
+ordinary transport failures remain immediate errors. The final incomplete
+inventory or transfer error identifies the run after exhausting the budget.
 
 `Workflow.psm1` owns only paths, installer selection, input files and native argument
 vectors. It calls the same `Install-ActionTools` used by the root and availability

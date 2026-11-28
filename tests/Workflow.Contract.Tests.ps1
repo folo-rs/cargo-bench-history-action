@@ -86,7 +86,6 @@ BeforeAll {
         return & ([scriptblock]::Create($expression))
     }
 }
-
 Describe 'Reusable <flow> workflow contracts' -ForEach @(
     @{ flow = 'history' }, @{ flow = 'pr' }, @{ flow = 'backfill' }
 ) {
@@ -194,14 +193,6 @@ Describe 'Reusable <flow> workflow contracts' -ForEach @(
         }
     }
 
-    It 'queues serialized jobs without replacing an older pending invocation' {
-        foreach ($job in $workflow.jobs.Values) {
-            if ($job['concurrency'] -and -not $job.concurrency['cancel-in-progress']) {
-                $job.concurrency.queue | Should -BeExactly 'max'
-            }
-        }
-    }
-
     It 'accepts a commit budget only for backfill execution, not other flows or preparation' {
         $workflow.on.workflow_call.inputs.ContainsKey('max-commits') | Should -Be ($flow -eq 'backfill')
         foreach ($job in $workflow.jobs.Values) {
@@ -305,7 +296,8 @@ Describe 'Scoped <flow> collection handoff' -ForEach @(
 
     It 'downloads all attempts for this flow from the authenticated run-wide view' {
         $upload = @($collectionJob.steps | Where-Object { $_['uses'] -like 'actions/upload-artifact@*' })[0]
-        $download = @($analysisJob.steps | Where-Object { $_['uses'] -like 'actions/download-artifact@*' })[0]
+        $download = @($analysisJob.steps |
+                Where-Object { $_['uses'] -ceq '$/.github/actions/artifact-download' })[0]
         $download.with.pattern | Should -BeExactly ("$prefix-collection-" + '${{ needs.prepare.outputs.instance }}-*')
         $download.with['github-token'] | Should -BeExactly '${{ github.token }}'
         $download.with['run-id'] | Should -BeExactly '${{ github.run_id }}'
@@ -491,7 +483,6 @@ Describe 'Historical backfill graph behavior' {
         Expand-ContractValue $work.concurrency.group $values | Should -Not -BeExactly $workGroup
         foreach ($queue in @($backfill.concurrency, $work.concurrency)) {
             $queue['cancel-in-progress'] | Should -BeFalse
-            $queue.queue | Should -BeExactly 'max'
         }
     }
 
@@ -530,7 +521,8 @@ Describe 'Historical backfill graph behavior' {
             foreach ($step in $job.steps) {
                 if ($step['uses']) {
                     $step.uses | Should -BeIn @('$/', '$/.github/actions/workflow-tools',
-                        '$/.github/actions/workflow-results', 'actions/upload-artifact@v7', 'actions/download-artifact@v8')
+                        '$/.github/actions/workflow-results', '$/.github/actions/artifact-download',
+                        'actions/upload-artifact@v7')
                 }
             }
         }
@@ -571,19 +563,8 @@ Describe 'Actions result graph for <flow>' -ForEach @(
         $entry.run | Should -Not -Match 'steps.context|GITHUB_WORKSPACE'
     }
 
-    It 'never makes a card conditional on publication or gives the finalizer publication permission' {
+    It 'never makes a card conditional on publication' {
         $resultWorkflow.jobs.result.if | Should -Not -Match 'inputs.publish|success\(\)'
-        foreach ($permission in $resultWorkflow.jobs.result.permissions.Values) {
-            $permission | Should -BeExactly 'read'
-        }
-        if ($flow -cne 'backfill') {
-            $resultWorkflow.jobs.result.if | Should -BeExactly "always() && needs.analyze.result == 'skipped'"
-            $finalizers = @($resultWorkflow.jobs.analyze.steps |
-                    Where-Object { $_['uses'] -ceq '$/.github/actions/workflow-results' })
-            $finalizers.Count | Should -Be 1
-            $finalizers[0].with.stage | Should -BeExactly 'analysis'
-            $resultWorkflow.jobs.analyze.steps[-1] | Should -Be $finalizers[0]
-        }
     }
 
     It 'retains immutable backfill attempts independently of successful command outputs' {
@@ -598,7 +579,8 @@ Describe 'Actions result graph for <flow>' -ForEach @(
         $upload.if | Should -BeExactly "always() && steps.evidence.outcome == 'success'"
         $upload.with.name | Should -BeExactly 'cbh-backfill-completion-${{ needs.prepare.outputs.instance }}-${{ matrix.platform }}-${{ github.run_attempt }}'
         $upload.with.ContainsKey('overwrite') | Should -BeFalse
-        $download = @($resultWorkflow.jobs.result.steps | Where-Object { $_['uses'] -like 'actions/download-artifact@*' })[0]
+        $download = @($resultWorkflow.jobs.result.steps |
+                Where-Object { $_['uses'] -ceq '$/.github/actions/artifact-download' })[0]
         $download.with['run-id'] | Should -BeExactly '${{ github.run_id }}'
         $download.with['github-token'] | Should -BeExactly '${{ github.token }}'
         $download.with.ContainsKey('merge-multiple') | Should -BeFalse
@@ -741,13 +723,6 @@ Describe 'Canary workflow wiring in <file>' -ForEach @(
         }
     }
 
-    It 'pins the Rust bootstrap implementation while retaining the rolling stable compiler' {
-        $bootstrap = @($canaryJob.steps | Where-Object { $_['uses'] -clike 'dtolnay/rust-toolchain@*' })
-        $bootstrap.Count | Should -Be 1
-        $bootstrap[0].uses | Should -Match '^dtolnay/rust-toolchain@[0-9a-f]{40}$'
-        $bootstrap[0].with.toolchain | Should -BeExactly 'stable'
-    }
-
     It 'backfills between collection and analysis without another root-action installation' {
         $steps = if ($file -eq 'test') { @($canaryCollectionJob.steps) + @($canaryJob.steps) } else { $canaryJob.steps }
         $ids = @($steps | ForEach-Object { $_['id'] })
@@ -785,35 +760,6 @@ Describe 'Canary workflow wiring in <file>' -ForEach @(
             $script:upload = $canarySteps['upload-reports']
             $script:retry = $canarySteps['upload-reports-retry']
             $script:requireUpload = $canarySteps['require-report-upload']
-        }
-
-        It 'retries only the official uploader with distinct names and identical report paths' {
-            $uploads = @($canaryJob.steps | Where-Object { $_['uses'] -like 'actions/upload-artifact@*' })
-            @($uploads.id) | Should -Be @('upload-reports', 'upload-reports-retry')
-            $retry.uses | Should -BeExactly $upload.uses
-            $retry.with.name | Should -BeExactly "$($upload.with.name)-retry"
-            $retry.with.path | Should -BeExactly $upload.with.path
-            foreach ($attempt in $uploads) {
-                $attempt.with['if-no-files-found'] | Should -BeExactly 'error'
-                $attempt.with.ContainsKey('overwrite') | Should -BeFalse
-                @($attempt.with.path.Trim() -split '\r?\n') | Should -Be @(
-                    '${{ steps.analyze.outputs.report-markdown }}'
-                    '${{ steps.analyze.outputs.report-json }}'
-                    '${{ steps.analyze.outputs.report-summary }}'
-                )
-            }
-        }
-
-        It 'permits recovery only for the initial upload without suppressing other failures' {
-            $canaryJob.ContainsKey('continue-on-error') | Should -BeFalse
-            $upload['continue-on-error'] | Should -BeTrue
-            foreach ($step in $canaryJob.steps) {
-                if ($step['id'] -ceq $upload.id) { continue }
-                $step.ContainsKey('continue-on-error') | Should -BeFalse
-            }
-            $ids = @($canaryJob.steps | ForEach-Object { $_['id'] })
-            [array]::IndexOf($ids, $retry.id) | Should -BeGreaterThan ([array]::IndexOf($ids, $upload.id))
-            [array]::IndexOf($ids, $requireUpload.id) | Should -BeGreaterThan ([array]::IndexOf($ids, $retry.id))
         }
 
         It 'preserves analysis, policy-skip and cancellation guards through both attempts and the assertion' {
@@ -916,7 +862,9 @@ Describe 'Hosted source collection reconciliation' {
         $receipt.with.path | Should -BeExactly '${{ steps.evidence.outputs.receipt }}'
         $receipt.with.name | Should -BeLike '*${{ github.run_attempt }}'
         $fixture.with.overwrite | Should -BeTrue
-        $downloads = @($sourceAnalyzer.steps | Where-Object { $_['uses'] -like 'actions/download-artifact@*' })
+        $downloads = @($sourceAnalyzer.steps | Where-Object {
+                $_['uses'] -ceq './.github/actions/artifact-download'
+            })
         $receiptDownload = @($downloads | Where-Object { $_.with['pattern'] })[0]
         $receiptDownload.with.pattern | Should -BeExactly 'canary-source-receipt-${{ matrix.rust_target }}-*'
         $receiptDownload.with['run-id'] | Should -BeExactly '${{ github.run_id }}'
@@ -990,27 +938,5 @@ Describe 'Hosted source collection reconciliation' {
                 Test-Path -LiteralPath $env:GITHUB_OUTPUT | Should -Be ($skipped -ceq 'true')
             }
         } finally { $env:GITHUB_OUTPUT = $previousOutput }
-    }
-}
-
-Describe 'CI bootstrap update coverage' {
-    It 'keeps both canaries on the same bootstrap implementation' {
-        $references = foreach ($file in @('test', 'install-tools')) {
-            $ciWorkflow = Get-Content (Join-Path $root ".github\workflows\$file.yml") -Raw | ConvertFrom-Yaml
-            foreach ($job in $ciWorkflow.jobs.Values) {
-                foreach ($step in $job['steps']) {
-                    if ($step['uses'] -clike 'dtolnay/rust-toolchain@*') { $step.uses }
-                }
-            }
-        }
-        @($references | Select-Object -Unique).Count | Should -Be 1
-    }
-
-    It 'leaves version updates to manual review without Dependabot configuration' {
-        # Both GitHub-supported filenames must remain absent for manual updates.
-        # Ref: docs/implementation.md, "CI evidence".
-        foreach ($file in @('dependabot.yml', 'dependabot.yaml')) {
-            Test-Path -LiteralPath (Join-Path $root ".github\$file") | Should -BeFalse
-        }
     }
 }

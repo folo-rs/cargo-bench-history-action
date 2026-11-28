@@ -1,0 +1,209 @@
+name: Internal same-run artifact download
+description: Wait for same-run artifacts to be visible, then use the official downloader.
+
+inputs:
+  api-url:
+    description: GitHub REST API base URL.
+    required: true
+  repository:
+    description: Repository in owner/name form.
+    required: true
+  run-id:
+    description: Workflow run that owns the requested artifacts.
+    required: true
+  run-attempt:
+    description: Current workflow attempt used for producer freshness.
+    required: true
+  github-token:
+    description: Token with actions read permission for the selected run.
+    required: true
+  path:
+    description: Directory that receives the extracted artifacts.
+    required: true
+  artifact-ids:
+    description: Comma-separated artifact IDs, mutually exclusive with name and pattern.
+    default: ''
+  name:
+    description: Exact artifact name, mutually exclusive with artifact-ids and pattern.
+    default: ''
+  pattern:
+    description: Artifact-name wildcard, mutually exclusive with artifact-ids and name.
+    default: ''
+  producer-job-prefix:
+    description: Prefix of jobs that can produce name- or pattern-selected artifacts.
+    default: ''
+  producer-step:
+    description: Exact successful upload step that establishes artifact freshness.
+    default: ''
+  artifact-name-prefix:
+    description: Prefix of immutable artifacts emitted by matching pattern producers.
+    default: ''
+  artifact-name-includes-job-suffix:
+    description: Insert each producer job name suffix before its run attempt.
+    default: 'false'
+  expected-identities:
+    description: Comma-separated producer identities required for a pattern.
+    default: ''
+  merge-multiple:
+    description: Extract all selected artifacts directly into the destination.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Preflight selected same-run artifacts
+      id: selected
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CBH_ARTIFACT_API_URL: ${{ inputs.api-url }}
+        CBH_ARTIFACT_REPOSITORY: ${{ inputs.repository }}
+        CBH_ARTIFACT_RUN_ID: ${{ inputs.run-id }}
+        CBH_ARTIFACT_RUN_ATTEMPT: ${{ inputs.run-attempt }}
+        CBH_ARTIFACT_IDS: ${{ inputs.artifact-ids }}
+        CBH_ARTIFACT_NAME: ${{ inputs.name }}
+        CBH_ARTIFACT_PATTERN: ${{ inputs.pattern }}
+        CBH_ARTIFACT_PRODUCER_JOB_PREFIX: ${{ inputs.producer-job-prefix }}
+        CBH_ARTIFACT_PRODUCER_STEP: ${{ inputs.producer-step }}
+        CBH_ARTIFACT_NAME_PREFIX: ${{ inputs.artifact-name-prefix }}
+        CBH_ARTIFACT_NAME_INCLUDES_JOB_SUFFIX: ${{ inputs.artifact-name-includes-job-suffix }}
+        CBH_ARTIFACT_EXPECTED_IDENTITIES: ${{ inputs.expected-identities }}
+        CBH_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        $includeJobSuffix = if ($env:CBH_ARTIFACT_NAME_INCLUDES_JOB_SUFFIX -ceq 'true') { $true }
+        elseif ($env:CBH_ARTIFACT_NAME_INCLUDES_JOB_SUFFIX -ceq 'false') { $false }
+        else { throw "artifact-name-includes-job-suffix must be true or false." }
+        Import-Module (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'ArtifactVisibility.psm1') -Force
+        $selection = @(Wait-ArtifactVisibility -ApiUrl $env:CBH_ARTIFACT_API_URL `
+          -Repository $env:CBH_ARTIFACT_REPOSITORY -RunId $env:CBH_ARTIFACT_RUN_ID `
+          -RunAttempt $env:CBH_ARTIFACT_RUN_ATTEMPT `
+          -GitHubToken $env:GH_TOKEN -ArtifactIds $env:CBH_ARTIFACT_IDS `
+          -Name $env:CBH_ARTIFACT_NAME -Pattern $env:CBH_ARTIFACT_PATTERN `
+          -ProducerJobPrefix $env:CBH_ARTIFACT_PRODUCER_JOB_PREFIX `
+          -ProducerStep $env:CBH_ARTIFACT_PRODUCER_STEP `
+          -ArtifactNamePrefix $env:CBH_ARTIFACT_NAME_PREFIX `
+          -ArtifactNameIncludesJobSuffix:$includeJobSuffix `
+          -ExpectedIdentities $env:CBH_ARTIFACT_EXPECTED_IDENTITIES)
+        $staging = Join-Path $env:RUNNER_TEMP "cbh-artifacts-$([guid]::NewGuid().ToString('N'))"
+        "ids=$($selection.Id -join ',')" >> $env:GITHUB_OUTPUT
+        "selection=$(ConvertTo-Json -InputObject $selection -Compress)" >> $env:GITHUB_OUTPUT
+        "staging=$staging" >> $env:GITHUB_OUTPUT
+    # A single same-run ID uses the artifact service without overriding any
+    # credential defaults. Multiple IDs retain the token because their inventory
+    # can be narrower than the same-run client view.
+    - name: Download one selected same-run artifact
+      id: transfer-single
+      if: steps.selected.outputs.ids != '' && !contains(steps.selected.outputs.ids, ',')
+      continue-on-error: true
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        path: ${{ steps.selected.outputs.staging }}/first
+        merge-multiple: ${{ inputs.merge-multiple }}
+    - name: Download selected same-run artifact set
+      id: transfer-multiple
+      if: contains(steps.selected.outputs.ids, ',')
+      continue-on-error: true
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        path: ${{ steps.selected.outputs.staging }}/first
+        merge-multiple: ${{ inputs.merge-multiple }}
+        github-token: ${{ inputs.github-token }}
+        repository: ${{ inputs.repository }}
+        run-id: ${{ inputs.run-id }}
+    - name: Check first transfer against frozen selection
+      id: complete
+      if: steps.transfer-single.outcome == 'success' || steps.transfer-multiple.outcome == 'success'
+      continue-on-error: true
+      shell: pwsh
+      env:
+        CBH_ACTION_PATH: ${{ github.action_path }}
+        CBH_SELECTION: ${{ steps.selected.outputs.selection }}
+        CBH_SOURCE: ${{ steps.transfer-single.outcome == 'success' && steps.transfer-single.outputs.download-path || steps.transfer-multiple.outputs.download-path }}
+        CBH_MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
+      run: |
+        $mergeMultiple = if ($env:CBH_MERGE_MULTIPLE -ceq 'true') { $true }
+        elseif ($env:CBH_MERGE_MULTIPLE -ceq 'false') { $false }
+        else { throw 'merge-multiple must be true or false.' }
+        Import-Module (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'ArtifactVisibility.psm1') -Force
+        Assert-ArtifactTransferComplete -Path $env:CBH_SOURCE `
+          -Selection (ConvertFrom-Json -InputObject $env:CBH_SELECTION -NoEnumerate) `
+          -MergeMultiple:$mergeMultiple
+    - name: Check archive access before retrying failed transfer
+      id: archive
+      if: >-
+        steps.transfer-single.outcome == 'failure' ||
+        steps.transfer-multiple.outcome == 'failure' ||
+        steps.complete.outcome == 'failure'
+      shell: pwsh
+      env:
+        CBH_ACTION_PATH: ${{ github.action_path }}
+        CBH_ARTIFACT_IDS: ${{ steps.selected.outputs.ids }}
+        CBH_API_URL: ${{ inputs.api-url }}
+        CBH_REPOSITORY: ${{ inputs.repository }}
+        CBH_ALLOW_READY_REDIRECT: ${{ (steps.transfer-single.outcome == 'success' || steps.transfer-multiple.outcome == 'success') && steps.complete.outcome == 'failure' }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        Write-Warning 'Artifact transfer failed. Checking archive access with the workflow token before retrying.'
+        Import-Module (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'ArtifactVisibility.psm1') -Force
+        $allowReadyRedirect = if ($env:CBH_ALLOW_READY_REDIRECT -ceq 'true') { $true }
+        elseif ($env:CBH_ALLOW_READY_REDIRECT -ceq 'false') { $false }
+        else { throw 'archive readiness classification must be true or false.' }
+        $useRest = Wait-ArtifactArchiveRedirect -ApiUrl $env:CBH_API_URL `
+          -Repository $env:CBH_REPOSITORY -ArtifactIds ($env:CBH_ARTIFACT_IDS -split ',') `
+          -GitHubToken $env:GH_TOKEN -AllowReadyRedirect:$allowReadyRedirect
+        "rest=$useRest" >> $env:GITHUB_OUTPUT
+    - name: Retry one archive transfer with REST access
+      id: retry-single-rest
+      if: >-
+        steps.archive.outcome == 'success' &&
+        steps.archive.outputs.rest == 'true' &&
+        !contains(steps.selected.outputs.ids, ',')
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        path: ${{ steps.selected.outputs.staging }}/retry-rest
+        merge-multiple: ${{ inputs.merge-multiple }}
+        github-token: ${{ inputs.github-token }}
+        repository: ${{ inputs.repository }}
+        run-id: ${{ inputs.run-id }}
+    - name: Retry one archive transfer with the same-run service
+      id: retry-single-service
+      if: >-
+        steps.archive.outcome == 'success' &&
+        steps.archive.outputs.rest == 'false' &&
+        !contains(steps.selected.outputs.ids, ',')
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        path: ${{ steps.selected.outputs.staging }}/retry-service
+        merge-multiple: ${{ inputs.merge-multiple }}
+    - name: Retry selected artifact set with REST access
+      id: retry-multiple
+      if: steps.archive.outcome == 'success' && contains(steps.selected.outputs.ids, ',')
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ steps.selected.outputs.ids }}
+        path: ${{ steps.selected.outputs.staging }}/retry-multiple
+        merge-multiple: ${{ inputs.merge-multiple }}
+        github-token: ${{ inputs.github-token }}
+        repository: ${{ inputs.repository }}
+        run-id: ${{ inputs.run-id }}
+    - name: Expose only the completed download
+      if: steps.selected.outputs.ids != ''
+      shell: pwsh
+      env:
+        CBH_ACTION_PATH: ${{ github.action_path }}
+        CBH_SELECTION: ${{ steps.selected.outputs.selection }}
+        CBH_SOURCE: ${{ steps.complete.outcome == 'success' && (steps.transfer-single.outcome == 'success' && steps.transfer-single.outputs.download-path || steps.transfer-multiple.outputs.download-path) || (steps.retry-single-rest.outcome == 'success' && steps.retry-single-rest.outputs.download-path || steps.retry-single-service.outcome == 'success' && steps.retry-single-service.outputs.download-path || steps.retry-multiple.outputs.download-path) }}
+        CBH_DESTINATION: ${{ inputs.path }}
+        CBH_MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
+      run: |
+        $mergeMultiple = if ($env:CBH_MERGE_MULTIPLE -ceq 'true') { $true }
+        elseif ($env:CBH_MERGE_MULTIPLE -ceq 'false') { $false }
+        else { throw 'merge-multiple must be true or false.' }
+        Import-Module (Join-Path -Path $env:CBH_ACTION_PATH -ChildPath '..' -AdditionalChildPath '..', '..', 'scripts', 'ArtifactVisibility.psm1') -Force
+        Publish-ArtifactTransfer -Path $env:CBH_SOURCE `
+          -Selection (ConvertFrom-Json -InputObject $env:CBH_SELECTION -NoEnumerate) `
+          -Destination $env:CBH_DESTINATION -MergeMultiple:$mergeMultiple
